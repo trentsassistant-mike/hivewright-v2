@@ -18,50 +18,47 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import path from "node:path";
 import { applyOutOfJournalMigrations, MIGRATIONS_FOLDER } from "./lib/drizzle-migrations";
+import { resolveTestDatabaseConfig } from "./lib/test-db-config";
 import { syncRoleLibrary } from "../src/roles/sync";
 
-const TEST_DB_NAME_PREFIX = "hivewright_test";
-const ADMIN_URL =
-  process.env.TEST_ADMIN_URL ??
-  "postgresql://hivewright:hivewright@localhost:5432/postgres";
-const TEST_URL =
-  process.env.TEST_DATABASE_URL ??
-  `postgresql://hivewright:hivewright@localhost:5432/${TEST_DB_NAME_PREFIX}`;
-const TEST_DB_NAME = decodeURIComponent(new URL(TEST_URL).pathname.replace(/^\//, ""));
-
-if (!TEST_DB_NAME.startsWith(TEST_DB_NAME_PREFIX)) {
-  throw new Error(
-    `[setup-test-db] aborting: '${TEST_DB_NAME}' must start with '${TEST_DB_NAME_PREFIX}'`,
-  );
-}
-
 async function main() {
+  const config = await resolveTestDatabaseConfig();
+  process.env.TEST_ADMIN_URL = config.adminUrl;
+  process.env.TEST_DATABASE_URL = config.testUrl;
+  process.env.DATABASE_URL = config.testUrl;
+  const preserveExisting = process.env.HIVEWRIGHT_PRESERVE_TEST_DB === "1";
+
   // 1. Ensure database exists.
-  const admin = postgres(ADMIN_URL);
+  const admin = postgres(config.adminUrl);
   try {
     const rows = await admin`
-      SELECT 1 FROM pg_database WHERE datname = ${TEST_DB_NAME}
+      SELECT 1 FROM pg_database WHERE datname = ${config.databaseName}
     `;
-    if (rows.length === 0) {
-      console.log(`[setup-test-db] creating database ${TEST_DB_NAME}`);
+    if (rows.length > 0 && !preserveExisting) {
+      console.log(`[setup-test-db] dropping database ${config.databaseName}`);
+      await admin.unsafe(`DROP DATABASE ${config.databaseName} WITH (FORCE)`);
+    }
+
+    if (rows.length === 0 || !preserveExisting) {
+      console.log(`[setup-test-db] creating database ${config.databaseName}`);
       // CREATE DATABASE cannot be parameterised; identifier is a hardcoded
       // constant above, so this is safe from injection.
-      await admin.unsafe(`CREATE DATABASE ${TEST_DB_NAME}`);
+      await admin.unsafe(`CREATE DATABASE ${config.databaseName}`);
     } else {
-      console.log(`[setup-test-db] database ${TEST_DB_NAME} already exists`);
+      console.log(`[setup-test-db] database ${config.databaseName} already exists`);
     }
   } finally {
     await admin.end();
   }
 
   // 2. Enable pgvector + run migrations.
-  const sql = postgres(TEST_URL, { max: 1 });
+  const sql = postgres(config.testUrl, { max: 1 });
   try {
     // Safety net: refuse if we somehow connected to the wrong DB.
     const [row] = await sql`SELECT current_database() AS db`;
-    if (row.db !== TEST_DB_NAME) {
+    if (row.db !== config.databaseName) {
       throw new Error(
-        `[setup-test-db] aborting: connected to '${row.db}', expected '${TEST_DB_NAME}'`,
+        `[setup-test-db] aborting: connected to '${row.db}', expected '${config.databaseName}'`,
       );
     }
 
@@ -75,7 +72,7 @@ async function main() {
         throw new Error(
           `[setup-test-db] cannot install pgvector: ${msg}\n\n` +
             `pgvector requires superuser to install. Run this once and re-try:\n` +
-            `  sudo -u postgres psql -d ${TEST_DB_NAME} \\\n` +
+            `  sudo -u postgres psql -d ${config.databaseName} \\\n` +
             `    -c "CREATE EXTENSION IF NOT EXISTS vector;"\n\n` +
             `Or grant the hivewright role superuser in a local-only test database:\n` +
             `  sudo -u postgres psql -c "ALTER ROLE hivewright SUPERUSER;"`,

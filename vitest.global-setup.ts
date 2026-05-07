@@ -1,30 +1,29 @@
 /**
  * Vitest globalSetup: runs once before any test file is loaded.
- * Ensures hivewright_test exists and is migrated. Idempotent — re-running
- * the suite without dropping the DB just confirms migrations are current.
+ * Ensures a hivewright_test-prefixed database exists and is migrated.
  *
- * No teardown needed: the test-db pool lives in the test worker process,
- * which vitest tears down when the run completes. Per-file `afterAll`
- * blocks must NOT call closeTestSql() — the pool is shared across every
- * test file and closing it mid-run breaks every file that hasn't run yet.
+ * If TEST_DATABASE_URL/TEST_ADMIN_URL are not set, setup auto-detects a
+ * local Postgres admin connection on localhost ports 5432/5433 using the
+ * current OS user or postgres. This keeps fresh self-hosted clones testable
+ * without baking private machine credentials into the public repo.
  */
 import { spawnSync } from "node:child_process";
-
-const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL ??
-  "postgresql://hivewright:hivewright@localhost:5432/hivewright_test";
+import { resolveTestDatabaseConfig } from "./scripts/lib/test-db-config";
 
 export default async function setup() {
-  process.env.TEST_DATABASE_URL = TEST_DATABASE_URL;
-  process.env.DATABASE_URL = TEST_DATABASE_URL;
+  const config = await resolveTestDatabaseConfig();
+  process.env.TEST_ADMIN_URL = config.adminUrl;
+  process.env.TEST_DATABASE_URL = config.testUrl;
+  process.env.DATABASE_URL = config.testUrl;
 
   const result = spawnSync("npm", ["run", "test:setup-db"], {
     stdio: "inherit",
     encoding: "utf8",
     env: {
       ...process.env,
-      TEST_DATABASE_URL,
-      DATABASE_URL: TEST_DATABASE_URL,
+      TEST_ADMIN_URL: config.adminUrl,
+      TEST_DATABASE_URL: config.testUrl,
+      DATABASE_URL: config.testUrl,
     },
   });
   if (result.error) {
@@ -41,8 +40,9 @@ export default async function setup() {
   await import("./tests/_lib/test-db");
 
   return async () => {
-    process.env.TEST_DATABASE_URL = TEST_DATABASE_URL;
-    process.env.DATABASE_URL = TEST_DATABASE_URL;
+    process.env.TEST_ADMIN_URL = config.adminUrl;
+    process.env.TEST_DATABASE_URL = config.testUrl;
+    process.env.DATABASE_URL = config.testUrl;
     const { closeTestSql } = await import("./tests/_lib/test-db");
     await closeTestSql();
   };

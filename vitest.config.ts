@@ -1,10 +1,6 @@
 import { defineConfig } from "vitest/config";
 import path from "path";
 
-const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL ??
-  "postgresql://hivewright:hivewright@localhost:5432/hivewright_test";
-
 export default defineConfig({
   test: {
     globals: true,
@@ -14,8 +10,6 @@ export default defineConfig({
     globalSetup: ["./vitest.global-setup.ts"],
     env: {
       AUTH_SECRET: "vitest-auth-secret",
-      DATABASE_URL: TEST_DATABASE_URL,
-      TEST_DATABASE_URL,
     },
   },
   resolve: {
