@@ -1,0 +1,13 @@
+slug: doctor
+name: Doctor
+department: null
+type: system
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops
+  - quality-doctor-procedure-gate
+# Doctor emits a DoctorDiagnosis; the dispatcher applies remediation
+# on the parent task. The doctor task itself is single-turn.
+terminal: true

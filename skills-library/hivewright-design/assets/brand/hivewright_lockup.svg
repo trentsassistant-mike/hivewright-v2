@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" width="720" height="240">
+  <defs>
+    <linearGradient id="hexBevelL" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFE89A"></stop>
+      <stop offset="50%" stop-color="#E59A1B"></stop>
+      <stop offset="100%" stop-color="#5C3206"></stop>
+    </linearGradient>
+    <linearGradient id="hexFaceL" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFD56A"></stop>
+      <stop offset="22%" stop-color="#F0A416"></stop>
+      <stop offset="50%" stop-color="#9A5400"></stop>
+      <stop offset="78%" stop-color="#F0A416"></stop>
+      <stop offset="100%" stop-color="#FFD56A"></stop>
+    </linearGradient>
+    <linearGradient id="hLetterL" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFE89A"></stop>
+      <stop offset="40%" stop-color="#FFB836"></stop>
+      <stop offset="62%" stop-color="#9A5400"></stop>
+      <stop offset="100%" stop-color="#FFD56A"></stop>
+    </linearGradient>
+    <linearGradient id="wordmarkInk" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1B1410"></stop>
+      <stop offset="100%" stop-color="#3A2A1A"></stop>
+    </linearGradient>
+  </defs>
+
+  
+  <g transform="translate(20,20) scale(0.83)">
+    <polygon points="120,12 211,64 211,176 120,228 29,176 29,64" fill="url(#hexBevelL)"></polygon>
+    <polygon points="120,28 197,72 197,168 120,212 43,168 43,72" fill="url(#hexFaceL)"></polygon>
+    <polygon points="120,28 197,72 197,168 120,212 43,168 43,72" fill="none" stroke="#000" stroke-width="1.5" stroke-opacity="0.35"></polygon>
+    <path d="M 84 70 L 104 70 L 104 170 L 84 170 Z" fill="url(#hLetterL)" stroke="#FFE89A" stroke-width="0.8"></path>
+    <path d="M 136 70 L 156 70 L 156 170 L 136 170 Z" fill="url(#hLetterL)" stroke="#FFE89A" stroke-width="0.8"></path>
+    <path d="M 84 110 L 156 110 L 156 130 L 84 130 Z" fill="url(#hLetterL)" stroke="#FFE89A" stroke-width="0.8"></path>
+  </g>
+
+  
+  <text x="240" y="148" font-family="Fraunces, Georgia, serif" font-weight="500" font-size="84" letter-spacing="-0.02em" fill="url(#wordmarkInk)">Hivewright</text>
+
+  
+  <line x1="240" y1="172" x2="640" y2="172" stroke="#E59A1B" stroke-width="1.5" stroke-opacity="0.6"></line>
+  <polygon points="438,168 446,172 446,180 438,184 430,180 430,172" fill="none" stroke="#E59A1B" stroke-width="1.2"></polygon>
+</svg>

@@ -1,0 +1,11 @@
+slug: content-writer
+name: Content Writer
+department: marketing
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops
+  - content-creation-toolkit
+  - seo-keyword-analysis

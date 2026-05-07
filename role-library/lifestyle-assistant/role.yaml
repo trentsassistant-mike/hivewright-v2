@@ -1,0 +1,9 @@
+slug: lifestyle-assistant
+name: Lifestyle Assistant
+department: personal
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops

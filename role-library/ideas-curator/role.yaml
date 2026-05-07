@@ -1,0 +1,9 @@
+slug: ideas-curator
+name: Ideas Curator
+department: strategy
+type: system
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills: []
+terminal: true

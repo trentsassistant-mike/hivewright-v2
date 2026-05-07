@@ -1,0 +1,9 @@
+slug: contract-specialist
+name: Contract Specialist
+department: legal
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops

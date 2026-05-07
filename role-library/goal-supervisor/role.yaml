@@ -1,0 +1,13 @@
+slug: goal-supervisor
+name: Goal Supervisor
+department: null
+type: system
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops
+# Goal supervisor owns sprint continuation via its persistent session;
+# individual goal-supervisor task completions are not expected to
+# spawn direct follow-up children.
+terminal: true

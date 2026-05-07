@@ -1,0 +1,9 @@
+slug: hive-development-agent
+name: Hive Development Agent
+department: sales
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops

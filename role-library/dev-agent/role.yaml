@@ -1,0 +1,10 @@
+slug: dev-agent
+name: Developer Agent
+department: engineering
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops
+  - static-analysis-orchestrator

@@ -1,0 +1,302 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500&display=swap");
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-heading: var(--font-display);
+  --font-display: var(--font-display);
+  --color-honey-50: var(--honey-50);
+  --color-honey-300: var(--honey-300);
+  --color-honey-500: var(--honey-500);
+  --color-honey-700: var(--honey-700);
+  --color-honey-900: var(--honey-900);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  /* Honeycomb — ambient whisper only. Stroke-only (no fill) at low opacity,
+   * on a larger tile, so the pattern reads as atmosphere behind content
+   * rather than a grid competing with it.
+   */
+  --hex-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='128' viewBox='0 0 56 100'%3E%3Cpath d='M28 66L0 50V16L28 0l28 16v34L28 66zm0 0v34' fill='none' stroke='%23fcd34d' stroke-opacity='0.035' stroke-width='0.8'/%3E%3C/svg%3E");
+
+  /* Graphite command-center baseline. The dashboard is dark by default so
+   * inherited surfaces cannot fall back to the old cream treatment.
+   */
+  --background: oklch(0.155 0.004 75);
+  --foreground: oklch(0.935 0.012 80);
+  --card: oklch(0.198 0.006 75);
+  --card-foreground: oklch(0.935 0.012 80);
+  --popover: oklch(0.198 0.006 75);
+  --popover-foreground: oklch(0.935 0.012 80);
+  --primary: oklch(0.74 0.19 64);
+  --primary-foreground: oklch(0.14 0.006 75);
+  --secondary: oklch(0.24 0.008 75);
+  --secondary-foreground: oklch(0.935 0.012 80);
+  --muted: oklch(0.23 0.006 75);
+  --muted-foreground: oklch(0.72 0.016 80);
+  --accent: oklch(0.27 0.012 75);
+  --accent-foreground: oklch(0.935 0.012 80);
+  --destructive: oklch(0.62 0.18 28);
+  --border: oklch(1 0 0 / 8%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.74 0.16 78);
+  --chart-1: oklch(0.82 0.16 78);
+  --chart-2: oklch(0.68 0.18 58);
+  --chart-3: oklch(0.58 0.15 42);
+  --chart-4: oklch(0.45 0.12 35);
+  --chart-5: oklch(0.32 0.08 35);
+  --honey-50: oklch(0.97 0.04 82);
+  --honey-300: oklch(0.86 0.16 76);
+  --honey-500: oklch(0.74 0.19 64);
+  --honey-700: oklch(0.47 0.155 48);
+  --honey-900: oklch(0.30 0.10 42);
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --radius: 0.625rem;
+  --sidebar: oklch(0.145 0.005 75);
+  --sidebar-foreground: oklch(0.935 0.012 80);
+  --sidebar-primary: oklch(0.74 0.19 64);
+  --sidebar-primary-foreground: oklch(0.14 0.006 75);
+  --sidebar-accent: oklch(0.20 0.008 75);
+  --sidebar-accent-foreground: oklch(0.935 0.012 80);
+  --sidebar-border: oklch(1 0 0 / 7%);
+  --sidebar-ring: oklch(0.74 0.16 78);
+}
+
+.dark {
+  /* Dark mode: whisper-only pattern. Stroke dropped to 0.055 and
+   * desaturated toward gold so it doesn't blend into "brown mesh" over
+   * the cooler base. Owner feedback 2026-04-20: "too pronounced, brown". */
+  --hex-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='128' viewBox='0 0 56 100'%3E%3Cpath d='M28 66L0 50V16L28 0l28 16v34L28 66zm0 0v34' fill='none' stroke='%23fcd34d' stroke-opacity='0.04' stroke-width='0.8'/%3E%3C/svg%3E");
+
+  /* Dark mode — neutral graphite base with a whisper of warmth. Chroma
+   * pulled way down so surfaces no longer read "brown"; amber stays for
+   * primary/accent so the hive identity still sings. */
+  --background: oklch(0.155 0.004 75);
+  --foreground: oklch(0.935 0.012 80);
+  --card: oklch(0.198 0.006 75);
+  --card-foreground: oklch(0.935 0.012 80);
+  --popover: oklch(0.198 0.006 75);
+  --popover-foreground: oklch(0.935 0.012 80);
+  --primary: oklch(0.74 0.19 64);
+  --primary-foreground: oklch(0.14 0.006 75);
+  --secondary: oklch(0.24 0.008 75);
+  --secondary-foreground: oklch(0.935 0.012 80);
+  --muted: oklch(0.23 0.006 75);
+  --muted-foreground: oklch(0.72 0.016 80);
+  --accent: oklch(0.27 0.012 75);
+  --accent-foreground: oklch(0.935 0.012 80);
+  --destructive: oklch(0.62 0.18 28);
+  --border: oklch(1 0 0 / 8%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.74 0.16 78);
+  --chart-1: oklch(0.82 0.16 78);
+  --chart-2: oklch(0.68 0.18 58);
+  --chart-3: oklch(0.58 0.15 42);
+  --chart-4: oklch(0.45 0.12 35);
+  --chart-5: oklch(0.32 0.08 35);
+  --honey-50: oklch(0.97 0.04 82);
+  --honey-300: oklch(0.88 0.18 78);
+  --honey-500: oklch(0.82 0.16 78);
+  --honey-700: oklch(0.62 0.18 62);
+  --honey-900: oklch(0.32 0.10 42);
+  --sidebar: oklch(0.145 0.005 75);
+  --sidebar-foreground: oklch(0.935 0.012 80);
+  --sidebar-primary: oklch(0.74 0.19 64);
+  --sidebar-primary-foreground: oklch(0.14 0.006 75);
+  --sidebar-accent: oklch(0.20 0.008 75);
+  --sidebar-accent-foreground: oklch(0.935 0.012 80);
+  --sidebar-border: oklch(1 0 0 / 7%);
+  --sidebar-ring: oklch(0.74 0.16 78);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    color-scheme: dark;
+  }
+  html {
+    @apply font-sans;
+  }
+  body,
+  .dark body {
+    background:
+      radial-gradient(ellipse 90% 70% at 12% 0%, oklch(0.36 0.11 70 / 0.12), transparent 56%),
+      linear-gradient(180deg, oklch(0.15 0.004 75), oklch(0.12 0.004 75));
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  input,
+  textarea,
+  select {
+    @apply border-input bg-background text-foreground placeholder:text-muted-foreground;
+  }
+  input,
+  textarea,
+  select,
+  .dark input,
+  .dark textarea,
+  .dark select {
+    background-color: oklch(0.13 0.005 75);
+    border-color: oklch(1 0 0 / 10%);
+  }
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Main content surfaces carry the ambient hex pattern. A soft radial mask
+ * fades the pattern toward the centre of the viewport so text areas stay
+ * unobstructed while the edges retain just enough hive atmosphere. */
+.hive-surface {
+  position: relative;
+  background:
+    radial-gradient(ellipse 70% 48% at 52% -12%, oklch(0.82 0.16 78 / 0.08), transparent 58%),
+    linear-gradient(180deg, oklch(0.155 0.004 75), oklch(0.125 0.004 75));
+}
+.hive-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: var(--hex-pattern);
+  background-size: 220px 390px;
+  opacity: 0.8;
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 35%, transparent 0%, rgba(0, 0, 0, 0.35) 55%, rgba(0, 0, 0, 0.85) 90%);
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 35%, transparent 0%, rgba(0, 0, 0, 0.35) 55%, rgba(0, 0, 0, 0.85) 90%);
+  z-index: 0;
+}
+
+.dark .hive-surface::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, oklch(1 0 0 / 0.035), transparent 1px) 0 0 / 96px 96px,
+    linear-gradient(180deg, oklch(1 0 0 / 0.025), transparent 1px) 0 0 / 96px 96px;
+  opacity: 0.28;
+  z-index: 0;
+}
+.hive-surface > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Honey Glow — warm amber radial light used behind a page heading region.
+ * Decorative only: fades out before the primary content scan path so body
+ * text, lists, and cards below remain on stable contrast tokens.
+ */
+.hive-honey-glow {
+  position: relative;
+  isolation: isolate;
+}
+.hive-honey-glow::before {
+  content: "";
+  position: absolute;
+  /* Contain to the heading row — glow must fade before the first card below. */
+  inset: -0.5rem -1.5rem 0 -1.5rem;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 42% 80% at 22% 50%,
+    oklch(0.86 0.18 72 / 0.12),
+    oklch(0.86 0.16 70 / 0.04) 42%,
+    transparent 62%
+  );
+  filter: blur(6px);
+}
+.dark .hive-honey-glow::before {
+  background: radial-gradient(
+    ellipse 55% 110% at 22% 50%,
+    oklch(0.82 0.18 74 / 0.18),
+    oklch(0.62 0.18 62 / 0.07) 48%,
+    transparent 78%
+  );
+}
+
+/* Operations map — molten honey topology lines. Brass for structure, honey
+ * for live flow, ember for blockers. Glow comes from the SVG drop-shadow
+ * filter on each node; edges use thin strokes per the design system rule
+ * that depth lives in contrast, not in heavy outlines. */
+@keyframes op-map-flow {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+.op-map-edge {
+  stroke: rgba(184, 137, 90, 0.42);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+.op-map-edge--active {
+  stroke: rgba(255, 184, 54, 0.92);
+  stroke-width: 1.8;
+  stroke-dasharray: 0.035 0.035;
+  animation: op-map-flow 1.8s linear infinite;
+  filter: drop-shadow(0 0 5px rgba(255, 184, 54, 0.45));
+}
+.op-map-edge--blocking {
+  stroke: rgba(194, 74, 44, 0.95);
+  stroke-width: 2.1;
+  filter: drop-shadow(0 0 6px rgba(194, 74, 44, 0.55));
+}
+.op-map-edge--history {
+  stroke: rgba(148, 143, 134, 0.32);
+  stroke-width: 1;
+  stroke-dasharray: 0.02 0.035;
+}
+@media (prefers-reduced-motion: reduce) {
+  .op-map-edge--active {
+    animation: none;
+    stroke-dasharray: none;
+  }
+}

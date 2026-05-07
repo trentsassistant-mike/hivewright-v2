@@ -1,0 +1,35 @@
+import { jsonb, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { hives } from "./hives";
+import { tasks } from "./tasks";
+
+export const skillDrafts = pgTable("skill_drafts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  hiveId: uuid("hive_id").references(() => hives.id).notNull(),
+  roleSlug: varchar("role_slug", { length: 100 }).notNull(),
+  targetRoleSlugs: jsonb("target_role_slugs").$type<string[]>().default([]).notNull(),
+  sourceTaskId: uuid("source_task_id").references(() => tasks.id, { onDelete: "set null" }),
+  originatingTaskId: uuid("originating_task_id").references(() => tasks.id, { onDelete: "set null" }),
+  originatingFeedbackId: uuid("originating_feedback_id"),
+  slug: varchar("slug", { length: 100 }).notNull(),
+  content: text("content").notNull(),
+  scope: varchar("scope", { length: 20 }).notNull(),
+  sourceType: varchar("source_type", { length: 20 }).default("internal").notNull(),
+  provenanceUrl: text("provenance_url"),
+  internalSourceRef: text("internal_source_ref"),
+  licenseNotes: text("license_notes"),
+  securityReviewStatus: varchar("security_review_status", { length: 20 }).default("not_required").notNull(),
+  qaReviewStatus: varchar("qa_review_status", { length: 20 }).default("pending").notNull(),
+  evidence: jsonb("evidence").$type<Record<string, unknown>[]>().default([]).notNull(),
+  status: varchar("status", { length: 20 }).default("pending").notNull(),
+  feedback: text("feedback"),
+  approvedBy: varchar("approved_by", { length: 255 }),
+  approvedAt: timestamp("approved_at"),
+  publishedBy: varchar("published_by", { length: 255 }),
+  publishedAt: timestamp("published_at"),
+  archivedBy: varchar("archived_by", { length: 255 }),
+  archivedAt: timestamp("archived_at"),
+  archiveReason: text("archive_reason"),
+  adoptionEvidence: jsonb("adoption_evidence").$type<Record<string, unknown>[]>().default([]).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});

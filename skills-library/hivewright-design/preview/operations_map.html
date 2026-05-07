@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body{margin:0;padding:24px;background:var(--bg);display:flex;align-items:center;justify-content:center;}
+  svg{width:100%;max-width:640px;height:auto;}
+  .node{fill:#14161A;stroke:#B8895A;stroke-width:1.5;}
+  .node.active{fill:rgba(229,154,27,0.15);stroke:#E59A1B;filter:drop-shadow(0 0 12px rgba(229,154,27,0.6));}
+  .node.idle{stroke:rgba(184,137,90,0.4);}
+  .link{stroke:#3A382F;stroke-width:1.5;fill:none;}
+  .link.active{stroke:#E59A1B;stroke-width:1.5;stroke-dasharray:3 4;animation:flow 1.4s linear infinite;}
+  @keyframes flow{to{stroke-dashoffset:-14;}}
+  .ico{stroke:#B8895A;fill:none;stroke-width:1.5;}
+  .ico.on{stroke:#FFC562;}
+  .lbl{fill:#6F6A60;font-family:var(--font-ui);font-size:9px;letter-spacing:.06em;text-transform:uppercase;}
+</style></head><body>
+<svg viewBox="0 0 640 280" fill="none">
+  <!-- links -->
+  <path class="link active" d="M120,140 C 200,140 220,80 320,80"/>
+  <path class="link active" d="M320,80 C 420,80 440,140 520,140"/>
+  <path class="link" d="M120,140 C 200,140 220,200 320,200"/>
+  <path class="link active" d="M320,200 C 420,200 440,140 520,140"/>
+  <path class="link" d="M320,80 C 320,140 320,140 320,200"/>
+
+  <!-- center hive node -->
+  <polygon class="node active" points="320,40 360,60 360,100 320,120 280,100 280,60"/>
+  <g class="ico on" transform="translate(305,60)"><polygon points="15,5 26,11 26,23 15,29 4,23 4,11"/><line x1="11" y1="13" x2="11" y2="21"/><line x1="19" y1="13" x2="19" y2="21"/><line x1="11" y1="17" x2="19" y2="17"/></g>
+
+  <!-- left -->
+  <polygon class="node idle" points="120,110 152,128 152,164 120,182 88,164 88,128"/>
+  <text class="lbl" x="120" y="200" text-anchor="middle">Inbox</text>
+
+  <!-- right -->
+  <polygon class="node active" points="520,110 552,128 552,164 520,182 488,164 488,128"/>
+  <text class="lbl" x="520" y="200" text-anchor="middle" style="fill:#FFC562;">CRM</text>
+
+  <!-- top -->
+  <polygon class="node idle" points="320,160 352,178 352,214 320,232 288,214 288,178"/>
+  <text class="lbl" x="320" y="250" text-anchor="middle">Notify</text>
+
+  <!-- mini hexes -->
+  <polygon class="node" points="220,60 240,72 240,96 220,108 200,96 200,72" style="opacity:.6"/>
+  <polygon class="node" points="420,60 440,72 440,96 420,108 400,96 400,72" style="opacity:.6"/>
+  <polygon class="node" points="220,184 240,196 240,220 220,232 200,220 200,196" style="opacity:.4"/>
+  <polygon class="node" points="420,184 440,196 440,220 420,232 400,220 400,196" style="opacity:.6"/>
+</svg>
+</body></html>

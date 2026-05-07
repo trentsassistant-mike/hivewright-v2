@@ -1,0 +1,11 @@
+slug: social-media-manager
+name: Social Media Manager
+department: marketing
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops
+  - social-media-toolkit
+  - seo-keyword-analysis

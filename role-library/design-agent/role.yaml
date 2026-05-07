@@ -1,0 +1,18 @@
+slug: design-agent
+name: Design Agent
+department: engineering
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops
+# NOT terminal — design-agent commentary is exactly what we want the
+# Hive Supervisor to flag for follow-up. The original Hive Supervisor
+# use case: owner submits UI inspiration, design-agent reviews + comments,
+# then nothing happens because the implementation step was implicit.
+# The supervisor seeing this as an unsatisfied_completion is the FEATURE,
+# not a bug. The previous `terminal: true` setting was a defensive
+# overcorrection during the 2026-04-22 false-positive flood and broke
+# the supervisor's primary use case.
+terminal: false

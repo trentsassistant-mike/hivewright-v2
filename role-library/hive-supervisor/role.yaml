@@ -1,0 +1,13 @@
+slug: hive-supervisor
+name: Hive Supervisor
+department: internal-audit
+type: system
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hive-supervisor-heartbeat
+# Watchdog. Heartbeats are terminal by design — they produce at most a
+# supervisor_reports audit row and downstream remediation tasks; the
+# heartbeat task itself never needs a child. Detectors must not self-scan.
+terminal: true

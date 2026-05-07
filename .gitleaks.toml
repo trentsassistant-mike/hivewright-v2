@@ -1,0 +1,107 @@
+title = "HiveWright gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+# Placeholder env guidance; the example file intentionally contains variable
+# names that look secret-bearing, but the values instruct operators to replace
+# them at runtime.
+[[rules.allowlists]]
+description = "Example encryption key placeholder in .env.example"
+condition = "AND"
+paths = ['''\.env\.example$''']
+regexTarget = "secret"
+regexes = ['''^replace-with-''']
+
+# Historical proof artifacts store non-secret IDs and file-map prose. Keep the
+# allowlist tied to the exact artifact files and fields that gitleaks flags.
+[[rules.allowlists]]
+description = "Initiative auth proof run IDs are UUID artifacts, not secrets"
+condition = "AND"
+paths = ['''docs/qa/artifacts/initiative-auth-proof-2026-04-24/08-proof-summary\.json$''']
+regexTarget = "line"
+regexes = ['''"api(Brief)?LatestRunId":''']
+
+[[rules.allowlists]]
+description = "Graphite shell report file-map row is documentation prose"
+condition = "AND"
+paths = ['''docs/design/2026-04-30-sprint1-graphite-shell-report\.md$''']
+regexTarget = "line"
+regexes = ['''`src/(app|components)/''']
+
+# Superpowers plans include old example/test snippets. These are deliberately
+# fake values retained as planning context, not usable credentials.
+[[rules.allowlists]]
+description = "Phase 6 plan placeholder test keys and local DB examples"
+condition = "AND"
+paths = ['''docs/superpowers/plans/2026-04-06-phase6-polish\.md$''']
+regexTarget = "line"
+regexes = [
+  '''test-placeholder-key-replace-32ch''',
+  '''postgresql://example:[^@]+@localhost:5432/hivewright''',
+]
+
+# Test fixtures intentionally exercise secret-handling behavior with synthetic
+# keys or subscriptions. The path/rule pairs below avoid suppressing unrelated
+# findings in production code.
+[[rules.allowlists]]
+description = "Push subscription auth fixture keys are synthetic"
+condition = "AND"
+paths = ['''tests/api/push-subscribe\.test\.ts$''']
+regexTarget = "secret"
+regexes = ['''^[A-Za-z0-9+/]{18,24}==$''']
+
+[[rules.allowlists]]
+description = "Voice token test encryption key is a deterministic fixture"
+condition = "AND"
+paths = ['''tests/app/api/voice-token\.test\.ts$''']
+regexTarget = "line"
+regexes = ['''const TEST_ENCRYPTION_KEY =''']
+
+[[rules.allowlists]]
+description = "Connector runtime test encryption key is a deterministic fixture"
+condition = "AND"
+paths = ['''tests/connectors/runtime\.test\.ts$''']
+regexTarget = "line"
+regexes = ['''const TEST_ENCRYPTION_KEY =''']
+
+[[rules.allowlists]]
+description = "Notifier test encryption key is a deterministic fixture"
+condition = "AND"
+paths = ['''tests/dispatcher/notifier\.test\.ts$''']
+regexTarget = "line"
+regexes = ['''const TEST_ENCRYPTION_KEY =''']
+
+[[rules.allowlists]]
+description = "Session builder test encryption key is a deterministic fixture"
+condition = "AND"
+paths = ['''tests/dispatcher/session-builder-phase6\.test\.ts$''']
+regexTarget = "line"
+regexes = ['''const TEST_KEY =''']
+
+[[rules.allowlists]]
+description = "Phase 6 integration test encryption key is a deterministic fixture"
+condition = "AND"
+paths = ['''tests/integration/phase6\.test\.ts$''']
+regexTarget = "line"
+regexes = ['''const TEST_KEY =''']
+
+[[rules]]
+id = "jwt"
+
+[[rules.allowlists]]
+description = "Phase 2 credential detector examples are intentional fake snippets"
+condition = "AND"
+paths = ['''docs/superpowers/plans/2026-04-06-phase2-execution-pipeline\.md$''']
+regexTarget = "line"
+regexes = ['''expect\(containsCredentials\("eyJ''']
+
+[[rules.allowlists]]
+description = "Work product sensitivity test uses an intentional fake JWT"
+condition = "AND"
+paths = ['''tests/work-products/sensitivity\.test\.ts$''']
+regexTarget = "line"
+regexes = ['''expect\(containsCredentials\("eyJ''']

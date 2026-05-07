@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body{margin:0;padding:24px;background:var(--bg);font-family:var(--font-ui);}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:var(--r-sm);font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;border:1px solid var(--stroke);}
+  .dot{width:6px;height:6px;border-radius:50%;}
+  .ok{color:var(--sage-300);background:rgba(126,155,126,0.08);border-color:rgba(126,155,126,0.3);}
+  .ok .dot{background:var(--sage-400);box-shadow:0 0 8px var(--sage-400);}
+  .run{color:var(--honey-300);background:rgba(229,154,27,0.08);border-color:rgba(229,154,27,0.3);}
+  .run .dot{background:var(--honey-500);box-shadow:0 0 8px var(--honey-500);animation:pulse 2.4s var(--ease) infinite;}
+  .fail{color:var(--ember-400);background:rgba(194,74,44,0.08);border-color:rgba(194,74,44,0.35);}
+  .fail .dot{background:var(--ember-500);}
+  .approve{color:var(--ivory-50);background:rgba(255,255,255,0.04);border-color:var(--stroke-strong);}
+  .approve .dot{background:var(--ivory-300);}
+  .idle{color:var(--ivory-500);}
+  .idle .dot{background:var(--ivory-500);}
+  @keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+</style></head><body>
+<div class="row">
+  <span class="badge ok"><span class="dot"></span>Healthy</span>
+  <span class="badge run"><span class="dot"></span>Running</span>
+  <span class="badge approve"><span class="dot"></span>Approval req.</span>
+  <span class="badge fail"><span class="dot"></span>Failed</span>
+  <span class="badge idle"><span class="dot"></span>Idle</span>
+</div>
+</body></html>

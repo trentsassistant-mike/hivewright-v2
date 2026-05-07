@@ -1,0 +1,85 @@
+import fs from "node:fs";
+import path from "node:path";
+import { beforeEach, describe, expect, it } from "vitest";
+import { testSql as sql, truncateAll } from "../_lib/test-db";
+
+const MIGRATION_PATH = path.join(
+  process.cwd(),
+  "drizzle",
+  "0061_current_tech_research_schedule.sql",
+);
+
+beforeEach(async () => {
+  await truncateAll(sql);
+});
+
+describe("0061_current_tech_research_schedule.sql", () => {
+  it("backfills exactly one current-tech-research-daily schedule for each existing hive and stays idempotent", async () => {
+    await sql`
+      INSERT INTO hives (id, slug, name, type)
+      VALUES
+        ('11111111-1111-1111-1111-111111111111', 'current-tech-a', 'Current Tech A', 'digital'),
+        ('22222222-2222-2222-2222-222222222222', 'current-tech-b', 'Current Tech B', 'service')
+    `;
+
+    await sql`
+      INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, created_by)
+      VALUES (
+        '22222222-2222-2222-2222-222222222222'::uuid,
+        '30 8 * * *',
+        ${sql.json({
+          kind: "current-tech-research-daily",
+          assignedTo: "goal-supervisor",
+          title: "Current tech research daily cycle",
+          brief: "(populated at run time)",
+        })},
+        true,
+        'preexisting'
+      )
+    `;
+
+    const migrationSql = fs.readFileSync(MIGRATION_PATH, "utf8");
+    await sql.unsafe(migrationSql);
+    await sql.unsafe(migrationSql);
+
+    const rows = await sql<{
+      hive_id: string;
+      cron_expression: string;
+      created_by: string;
+      task_template: { kind: string; assignedTo: string; title: string };
+      next_run_at: Date | null;
+    }[]>`
+      SELECT hive_id, cron_expression, created_by, task_template, next_run_at
+      FROM schedules
+      WHERE task_template ->> 'kind' = 'current-tech-research-daily'
+      ORDER BY hive_id ASC
+    `;
+
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.cron_expression === "30 8 * * *")).toBe(true);
+    expect(rows.every((row) => row.task_template.kind === "current-tech-research-daily")).toBe(true);
+    expect(rows.every((row) => row.task_template.assignedTo === "goal-supervisor")).toBe(true);
+    expect(rows.every((row) => row.task_template.title === "Current tech research daily cycle")).toBe(true);
+
+    const createdByByHive = new Map(rows.map((row) => [row.hive_id, row.created_by]));
+    expect(createdByByHive.get("11111111-1111-1111-1111-111111111111")).toBe(
+      "migration:0061_current_tech_research_schedule",
+    );
+    expect(createdByByHive.get("22222222-2222-2222-2222-222222222222")).toBe(
+      "preexisting",
+    );
+
+    const insertedRow = rows.find(
+      (row) => row.hive_id === "11111111-1111-1111-1111-111111111111",
+    );
+    expect(insertedRow?.next_run_at).not.toBeNull();
+
+    const [{ count }] = await sql<Array<{ count: number }>>`
+      SELECT COUNT(*)::int AS count
+      FROM schedules
+      WHERE hive_id = '22222222-2222-2222-2222-222222222222'::uuid
+        AND task_template ->> 'kind' = 'current-tech-research-daily'
+    `;
+    expect(count).toBe(1);
+  });
+});

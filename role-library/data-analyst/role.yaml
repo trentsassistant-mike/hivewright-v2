@@ -1,0 +1,9 @@
+slug: data-analyst
+name: Data Analyst
+department: research
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops

@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body{margin:0;padding:24px;background:var(--bg);font-family:var(--font-ui);display:flex;flex-direction:column;gap:14px;}
+  label{font:var(--t-eyebrow);font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ivory-500);display:block;margin-bottom:6px;}
+  .input{display:flex;align-items:center;gap:10px;background:var(--well);border:1px solid var(--stroke);border-radius:var(--r-md);padding:10px 12px;}
+  .input:focus-within{border-color:var(--stroke-honey);box-shadow:0 0 0 3px rgba(229,154,27,0.12);}
+  .input input{flex:1;background:transparent;border:0;color:var(--ivory-50);font-family:inherit;font-size:14px;outline:none;}
+  .input input::placeholder{color:var(--ivory-500);}
+  .input svg{color:var(--ivory-500);}
+  .row{display:flex;gap:12px;}
+</style></head><body>
+<div class="row">
+  <div style="flex:1">
+    <label>Search</label>
+    <div class="input"><svg width="16" height="16"><use href="../assets/icons/icons.svg#search"/></svg><input placeholder="Search hives, agents, runs…"></div>
+  </div>
+  <div style="flex:1">
+    <label>Hive name</label>
+    <div class="input"><input placeholder="Acme operations" value="Acme operations"></div>
+  </div>
+</div>
+</body></html>

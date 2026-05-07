@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body{margin:0;padding:24px;background:var(--bg);font-family:var(--font-ui);}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;}
+  button{font-family:inherit;font-size:13px;font-weight:600;border-radius:var(--r-md);padding:8px 14px;cursor:pointer;border:1px solid transparent;transition:all var(--dur-fast) var(--ease);}
+  .primary{background:var(--honey-500);color:#1A0F00;box-shadow:var(--glow-honey);}
+  .primary:hover{background:var(--honey-300);}
+  .secondary{background:var(--surface-2);color:var(--ivory-50);border-color:var(--stroke-strong);}
+  .secondary:hover{background:var(--surface-3);}
+  .ghost{background:transparent;color:var(--ivory-200);border-color:var(--stroke);}
+  .ghost:hover{border-color:var(--stroke-strong);color:var(--ivory-50);}
+  .danger{background:transparent;color:var(--ember-400);border-color:rgba(194,74,44,0.4);}
+  .icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:var(--r-md);background:var(--surface-2);color:var(--ivory-200);border:1px solid var(--stroke);}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--stroke);background:var(--surface-2);color:var(--ivory-200);}
+</style></head><body>
+<div class="row">
+  <button class="primary">Build a hive</button>
+  <button class="secondary">New automation</button>
+  <button class="ghost">Cancel</button>
+  <button class="danger">Pause hive</button>
+  <button class="icon" aria-label="add"><svg width="16" height="16"><use href="../assets/icons/icons.svg#add"/></svg></button>
+  <span class="pill"><svg width="12" height="12"><use href="../assets/icons/icons.svg#play"/></svg>Run now</span>
+</div>
+</body></html>

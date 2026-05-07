@@ -1,0 +1,10 @@
+slug: security-auditor
+name: Security Auditor
+department: internal-audit
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops
+  - static-analysis-orchestrator

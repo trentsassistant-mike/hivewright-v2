@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hivewright · App</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="../../colors_and_type.css">
+<style>
+  html, body { height:100%; margin:0; }
+  * { box-sizing: border-box; }
+  @keyframes hwFlow { to { stroke-dashoffset: -14; } }
+  @keyframes hwPulse { 0%,100% { opacity:.4 } 50% { opacity:1 } }
+  body {
+    background:
+      radial-gradient(ellipse 80% 50% at 50% 0%, rgba(229,154,27,0.08), transparent 60%),
+      linear-gradient(180deg, #0E0A06 0%, #08060300 100%),
+      #08060300;
+    background-color: #08060300;
+    background-color: #0A0704;
+    color:#F2EBDD;
+    font-family: 'Manrope', system-ui, sans-serif;
+  }
+  .dark { color-scheme: dark; }
+  #root { min-height: 100vh; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body class="dark">
+<div id="root"></div>
+
+<script type="text/babel" src="Primitives.jsx"></script>
+<script type="text/babel" src="Sidebar.jsx"></script>
+<script type="text/babel" src="TopBar.jsx"></script>
+<script type="text/babel" src="KpiCard.jsx"></script>
+<script type="text/babel" src="OperationsMap.jsx"></script>
+<script type="text/babel" src="AgentList.jsx"></script>
+<script type="text/babel" src="RunsTable.jsx"></script>
+<script type="text/babel" src="Suggestions.jsx"></script>
+<script type="text/babel" src="WorkflowCanvas.jsx"></script>
+<script type="text/babel" src="NewAutomationModal.jsx"></script>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+function App() {
+  const [view, setView] = useState('overview');
+  const [modal, setModal] = useState(false);
+
+  useEffect(() => {
+    const apply = () => setView((location.hash || '#overview').slice(1));
+    apply();
+    window.addEventListener('hashchange', apply);
+    return () => window.removeEventListener('hashchange', apply);
+  }, []);
+
+  const nav = (id) => { location.hash = id; };
+
+  return (
+    <div data-screen-label="01 App" style={{display:'flex', minHeight:'100vh', position:'relative'}}>
+      {/* Ambient honeycomb wash, pinned to top */}
+      <div aria-hidden style={{
+        position:'fixed', inset:0, pointerEvents:'none', zIndex:0,
+        backgroundImage: 'url("../../assets/brand/header_honeycomb_light.png")',
+        backgroundRepeat:'repeat-x', backgroundPosition:'top center', backgroundSize:'1400px auto',
+        opacity: 0.18,
+        maskImage:'linear-gradient(180deg, black 0%, transparent 360px)',
+        WebkitMaskImage:'linear-gradient(180deg, black 0%, transparent 360px)',
+      }}/>
+      <div style={{display:'flex', width:'100%', position:'relative', zIndex:1}}>
+        <Sidebar active={view} onNav={nav}/>
+        <main style={{flex:1, display:'flex', flexDirection:'column', minWidth:0}}>
+          {view === 'overview' && <Overview onNew={() => setModal(true)}/>}
+          {view === 'workflows' && <WorkflowsView/>}
+          {view === 'agents' && <AgentsView/>}
+          {view === 'runs' && <RunsView/>}
+          {!['overview','workflows','agents','runs'].includes(view) && <PlaceholderView title={view}/>}
+        </main>
+      </div>
+      <NewAutomationModal open={modal} onClose={() => setModal(false)}/>
+    </div>
+  );
+}
+
+function Overview({ onNew }) {
+  const sparkA = [12,18,16,22,30,28,36,44,40,52,60,58,72,80,76,92,108,128];
+  const sparkB = [88,90,89,91,92,90,93,92,94,92,93,92,92,93,92,92,92,92];
+  const sparkC = [20,22,21,24,28,30,29,32,33,32,30,28,30,32,33,30,28,24];
+  const sparkD = [4,5,3,6,4,7,5,8,6,9,8,7,6,5,4,3,5,4];
+  return (
+    <div data-screen-label="01 Overview">
+      <TopBar
+        eyebrow="Hive · production"
+        title="Acme Operations"
+        actions={<>
+          <Button variant="ghost" icon="play">Run all</Button>
+          <Button variant="primary" icon="add" onClick={onNew}>New automation</Button>
+        </>}
+      />
+      <div style={{padding:'24px', display:'flex', flexDirection:'column', gap:14, maxWidth:1440, margin:'0 auto'}}>
+        <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:14}}>
+          <KpiCard label="Active runs" icon="hex" value="128" delta="+12 vs yesterday" sparkData={sparkA} color="#FFB836"/>
+          <KpiCard label="Agents online" icon="agents" value="24" delta="all healthy" sparkData={sparkC} color="#7E9B7E"/>
+          <KpiCard label="System health" icon="shield" value="92" suffix="%" delta="7d uptime" sparkData={sparkB} color="#7E9B7E"/>
+          <KpiCard label="Approvals pending" icon="approve" value="4" delta="2 over 4h" sparkData={sparkD} color="#E89682"/>
+        </div>
+
+        <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:14}}>
+          <OperationsMap/>
+          <Suggestions/>
+        </div>
+
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:14}}>
+          <AgentList/>
+          <RunsTable/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkflowsView() {
+  return (
+    <div data-screen-label="02 Workflows" style={{display:'flex', flexDirection:'column', flex:1}}>
+      <TopBar eyebrow="Workflow · draft" title="Vendor invoice triage" actions={<Button variant="ghost" icon="more"/>}/>
+      <WorkflowCanvas onCreate={() => alert('Workflow published')}/>
+    </div>
+  );
+}
+function AgentsView() {
+  return (<div data-screen-label="03 Agents">
+    <TopBar eyebrow="Swarm" title="All agents" actions={<Button variant="primary" icon="add">Add agent</Button>}/>
+    <div style={{padding:24, maxWidth:1440, margin:'0 auto'}}><AgentList/></div>
+  </div>);
+}
+function RunsView() {
+  return (<div data-screen-label="04 Runs">
+    <TopBar eyebrow="History" title="Runs" actions={<Button variant="ghost" icon="filter">Filter</Button>}/>
+    <div style={{padding:24, maxWidth:1440, margin:'0 auto'}}><RunsTable/></div>
+  </div>);
+}
+function PlaceholderView({ title }) {
+  return (<div data-screen-label={`05 ${title}`}>
+    <TopBar title={title.charAt(0).toUpperCase() + title.slice(1)} eyebrow="Section"/>
+    <div style={{display:'grid', placeItems:'center', height:'calc(100vh - 56px)', color:'#7C7060', fontSize:14}}>
+      <div style={{textAlign:'center', display:'flex', flexDirection:'column', alignItems:'center', gap:14}}>
+        <MoltenHex size={64} dim/>
+        <div>This section is part of the kit but not built out in this prototype.</div>
+      </div>
+    </div>
+  </div>);
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

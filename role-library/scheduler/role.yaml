@@ -1,0 +1,9 @@
+slug: scheduler
+name: Scheduler
+department: administration
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops

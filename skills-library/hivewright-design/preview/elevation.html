@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body{margin:0;padding:24px;background:var(--bg);font-family:var(--font-ui);}
+  .row{display:flex;gap:24px;align-items:flex-end;}
+  .demo{display:flex;flex-direction:column;align-items:center;gap:10px;}
+  .card{width:140px;height:80px;background:var(--surface-1);border:1px solid var(--stroke);border-radius:var(--r-lg);}
+  .card.elev{box-shadow:var(--shadow-card);}
+  .card.glow{box-shadow:var(--glow-honey);border-color:var(--stroke-honey);}
+  .card.modal{box-shadow:var(--shadow-modal);}
+  .lbl{font:var(--t-eyebrow);font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ivory-500);}
+</style></head><body>
+<div class="row">
+  <div class="demo"><div class="card"></div><div class="lbl">flat</div></div>
+  <div class="demo"><div class="card elev"></div><div class="lbl">elevation</div></div>
+  <div class="demo"><div class="card modal"></div><div class="lbl">modal</div></div>
+  <div class="demo"><div class="card glow"></div><div class="lbl">honey glow</div></div>
+</div>
+</body></html>

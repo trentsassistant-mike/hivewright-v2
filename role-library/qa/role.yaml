@@ -1,0 +1,12 @@
+slug: qa
+name: QA Reviewer
+department: null
+type: system
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops
+  - voice-transcription
+# QA reviews are single-turn verdicts; any remediation is a separate task.
+terminal: true

@@ -1,0 +1,12 @@
+slug: frontend-designer
+name: Frontend Designer
+department: design
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops
+  - frontend-design:frontend-design
+  - figma:figma-implement-design
+terminal: false

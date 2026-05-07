@@ -1,0 +1,11 @@
+slug: content-review-agent
+name: Content Review Agent
+department: qa
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops
+  - content-creation-toolkit
+  - seo-keyword-analysis

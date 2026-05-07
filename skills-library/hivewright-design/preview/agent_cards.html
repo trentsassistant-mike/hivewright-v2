@@ -1,0 +1,39 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body{margin:0;padding:20px;background:var(--bg);font-family:var(--font-ui);}
+  .card{width:300px;background:var(--surface-1);border:1px solid var(--stroke);border-radius:var(--r-lg);padding:16px;box-shadow:var(--shadow-card);}
+  .row{display:flex;gap:14px;}
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
+  .hex{width:36px;height:40px;display:grid;place-items:center;color:var(--honey-300);}
+  .name{font:var(--t-h3);font-weight:600;color:var(--ivory-50);}
+  .role{font:var(--t-mono);color:var(--ivory-500);font-size:11px;}
+  .stat{display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid var(--stroke);font-size:13px;}
+  .stat:first-of-type{border-top:0;}
+  .k{color:var(--ivory-500);}
+  .v{color:var(--ivory-50);font-variant-numeric:tabular-nums;}
+  .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;vertical-align:middle;}
+  .ok .dot{background:var(--sage-400);box-shadow:0 0 8px var(--sage-400);}
+  .ok{color:var(--sage-300);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;}
+</style></head><body>
+<div class="row">
+  <div class="card">
+    <div class="head">
+      <svg class="hex" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12,2 20,7 20,17 12,22 4,17 4,7"/><line x1="9" y1="8" x2="9" y2="16"/><line x1="15" y1="8" x2="15" y2="16"/><line x1="9" y1="12" x2="15" y2="12"/></svg>
+      <div><div class="name">Inbox Triage</div><div class="role">role · communications</div></div>
+    </div>
+    <div class="stat"><span class="k">Status</span><span class="ok"><span class="dot"></span>Active</span></div>
+    <div class="stat"><span class="k">Runs / 24h</span><span class="v">412</span></div>
+    <div class="stat"><span class="k">Avg latency</span><span class="v">1.2s</span></div>
+  </div>
+  <div class="card">
+    <div class="head">
+      <svg class="hex" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--brass-400)"><polygon points="12,2 20,7 20,17 12,22 4,17 4,7"/><line x1="9" y1="8" x2="9" y2="16"/><line x1="15" y1="8" x2="15" y2="16"/><line x1="9" y1="12" x2="15" y2="12"/></svg>
+      <div><div class="name">Vendor Reconciler</div><div class="role">role · finance</div></div>
+    </div>
+    <div class="stat"><span class="k">Status</span><span class="ok"><span class="dot"></span>Active</span></div>
+    <div class="stat"><span class="k">Runs / 24h</span><span class="v">38</span></div>
+    <div class="stat"><span class="k">Avg latency</span><span class="v">4.7s</span></div>
+  </div>
+</div>
+</body></html>

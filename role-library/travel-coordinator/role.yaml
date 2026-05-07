@@ -1,0 +1,9 @@
+slug: travel-coordinator
+name: Travel Coordinator
+department: personal
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops

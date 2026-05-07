@@ -1,0 +1,10 @@
+slug: quality-reviewer
+name: Quality Reviewer
+department: qa
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops
+terminal: true

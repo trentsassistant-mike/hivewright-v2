@@ -1,0 +1,99 @@
+/* HiveWright Design Tokens — aligned with hivewrightv2 codebase
+   (Next.js 16 + Tailwind 4 + shadcn · OKLCH palette · light + dark)
+   ------------------------------------------------------------------ */
+
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* Honeycomb whisper — stroke-only, ambient. Mirrors src/app/globals.css */
+  --hex-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='128' viewBox='0 0 56 100'%3E%3Cpath d='M28 66L0 50V16L28 0l28 16v34L28 66zm0 0v34' fill='none' stroke='%23b45309' stroke-opacity='0.07' stroke-width='0.8'/%3E%3C/svg%3E");
+
+  /* Light mode — amber/honey */
+  --background: oklch(0.965 0.02 78);
+  --foreground: oklch(0.18 0.012 60);
+  --card: oklch(0.998 0.003 78);
+  --card-foreground: oklch(0.18 0.012 60);
+  --primary: oklch(0.47 0.155 48);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.95 0.02 78);
+  --muted: oklch(0.95 0.013 78);
+  --muted-foreground: oklch(0.52 0.035 68);
+  --accent: oklch(0.94 0.028 76);
+  --accent-foreground: oklch(0.35 0.09 52);
+  --border: oklch(0.90 0.014 78);
+  --ring: oklch(0.62 0.17 54);
+  --destructive: oklch(0.577 0.245 27.325);
+
+  /* Molten-honey accent stops (extension layer) */
+  --honey-50:  oklch(0.97 0.04 82);
+  --honey-300: oklch(0.86 0.16 76);
+  --honey-500: oklch(0.74 0.19 64);
+  --honey-700: oklch(0.47 0.155 48);
+  --honey-900: oklch(0.30 0.10 42);
+
+  /* Type */
+  --font-sans:    'Manrope', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, monospace;
+
+  --radius: 0.625rem;
+}
+
+.dark {
+  --hex-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='128' viewBox='0 0 56 100'%3E%3Cpath d='M28 66L0 50V16L28 0l28 16v34L28 66zm0 0v34' fill='none' stroke='%23fcd34d' stroke-opacity='0.04' stroke-width='0.8'/%3E%3C/svg%3E");
+
+  --background: oklch(0.155 0.004 75);
+  --foreground: oklch(0.965 0.006 80);
+  --card: oklch(0.198 0.006 75);
+  --card-foreground: oklch(0.965 0.006 80);
+  --primary: oklch(0.82 0.16 78);
+  --primary-foreground: oklch(0.16 0.005 75);
+  --secondary: oklch(0.24 0.008 75);
+  --muted: oklch(0.23 0.006 75);
+  --muted-foreground: oklch(0.68 0.018 80);
+  --accent: oklch(0.27 0.012 75);
+  --accent-foreground: oklch(0.965 0.006 80);
+  --border: oklch(1 0 0 / 8%);
+  --ring: oklch(0.74 0.16 78);
+
+  --honey-50:  oklch(0.97 0.04 82);
+  --honey-300: oklch(0.88 0.18 78);
+  --honey-500: oklch(0.82 0.16 78);
+  --honey-700: oklch(0.62 0.18 62);
+  --honey-900: oklch(0.32 0.10 42);
+}
+
+html, body { background: var(--background); color: var(--foreground); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+
+/* Ambient hive surface (matches .hive-surface in app) */
+.hive-surface { position: relative; background-color: var(--background); }
+.hive-surface::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image: var(--hex-pattern); background-size: 220px 390px;
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 35%, transparent 0%, rgba(0,0,0,0.35) 55%, rgba(0,0,0,0.85) 90%);
+          mask-image: radial-gradient(ellipse 80% 60% at 50% 35%, transparent 0%, rgba(0,0,0,0.35) 55%, rgba(0,0,0,0.85) 90%);
+  z-index: 0;
+}
+.hive-surface > * { position: relative; z-index: 1; }
+
+/* Heading honey glow (matches .hive-honey-glow in app) */
+.hive-honey-glow { position: relative; isolation: isolate; }
+.hive-honey-glow::before {
+  content: ""; position: absolute; inset: -0.5rem -1.5rem 0 -1.5rem; z-index: -1; pointer-events: none;
+  background: radial-gradient(ellipse 42% 80% at 22% 50%, oklch(0.86 0.18 72 / 0.12), oklch(0.86 0.16 70 / 0.04) 42%, transparent 62%);
+  filter: blur(6px);
+}
+.dark .hive-honey-glow::before {
+  background: radial-gradient(ellipse 55% 110% at 22% 50%, oklch(0.82 0.18 74 / 0.18), oklch(0.62 0.18 62 / 0.07) 48%, transparent 78%);
+}
+
+/* Type semantic helpers */
+.hw-display { font-family: var(--font-display); font-size: 56px; line-height: 60px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.hw-h1      { font-size: 28px; line-height: 34px; font-weight: 600; letter-spacing: -0.01em; }
+.hw-h2      { font-size: 20px; line-height: 26px; font-weight: 600; }
+.hw-h3      { font-size: 15px; line-height: 22px; font-weight: 600; }
+.hw-body    { font-size: 14px; line-height: 20px; }
+.hw-small   { font-size: 13px; line-height: 18px; color: var(--muted-foreground); }
+.hw-eyebrow { font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted-foreground); }
+.hw-mono    { font-family: var(--font-mono); font-size: 13px; line-height: 20px; font-variant-numeric: tabular-nums; }
+.hw-num     { font-variant-numeric: tabular-nums; }

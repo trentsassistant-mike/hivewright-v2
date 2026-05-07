@@ -1,0 +1,18 @@
+slug: research-analyst
+name: Research Analyst
+department: research
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+skills:
+  - hivewright-ops
+  - web-research-verifier
+# NOT terminal — a research report is exactly the kind of output the
+# Hive Supervisor should flag so it can either spawn a follow-up
+# implementation task or create an EA-routed decision asking the
+# owner what to do with the findings. Keeping it terminal:true
+# (as defensively set during the 2026-04-22 false-positive flood)
+# defeated the supervisor's primary purpose: catching commentary
+# that goes nowhere.
+terminal: false

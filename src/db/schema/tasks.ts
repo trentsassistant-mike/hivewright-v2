@@ -1,0 +1,46 @@
+import { pgTable, uuid, varchar, text, boolean, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { hives } from "./hives";
+import { roleTemplates } from "./role-templates";
+import { goals } from "./goals";
+import { projects } from "./projects";
+
+export const tasks = pgTable("tasks", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  hiveId: uuid("hive_id").references(() => hives.id).notNull(),
+  assignedTo: varchar("assigned_to").references(() => roleTemplates.slug).notNull(),
+  createdBy: varchar("created_by", { length: 255 }).notNull(),
+  status: varchar("status", { length: 50 }).default("pending").notNull(),
+  priority: integer("priority").default(5).notNull(),
+  title: varchar("title", { length: 500 }).notNull(),
+  brief: text("brief").notNull(),
+  parentTaskId: uuid("parent_task_id"),
+  projectId: uuid("project_id").references(() => projects.id),
+  goalId: uuid("goal_id").references(() => goals.id),
+  sprintNumber: integer("sprint_number"),
+  qaRequired: boolean("qa_required").default(false).notNull(),
+  acceptanceCriteria: text("acceptance_criteria"),
+  resultSummary: text("result_summary"),
+  retryCount: integer("retry_count").default(0).notNull(),
+  retryAfter: timestamp("retry_after"),
+  lastHeartbeat: timestamp("last_heartbeat"),
+  dispatcherPid: integer("dispatcher_pid"),
+  doctorAttempts: integer("doctor_attempts").default(0).notNull(),
+  failureReason: text("failure_reason"),
+  routeSelectionEvidence: jsonb("route_selection_evidence").$type<Record<string, unknown>>(),
+  adapterOverride: varchar("adapter_override", { length: 100 }),
+  modelOverride: varchar("model_override", { length: 255 }),
+  freshInputTokens: integer("fresh_input_tokens"),
+  cachedInputTokens: integer("cached_input_tokens"),
+  cachedInputTokensKnown: boolean("cached_input_tokens_known").default(false).notNull(),
+  totalContextTokens: integer("total_context_tokens"),
+  estimatedBillableCostCents: integer("estimated_billable_cost_cents"),
+  tokensInput: integer("tokens_input"),
+  tokensOutput: integer("tokens_output"),
+  costCents: integer("cost_cents"),
+  modelUsed: varchar("model_used", { length: 255 }),
+  adapterUsed: varchar("adapter_used", { length: 100 }),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});

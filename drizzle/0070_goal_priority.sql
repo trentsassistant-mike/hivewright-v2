@@ -1,0 +1,1 @@
+ALTER TABLE "goals" ADD COLUMN IF NOT EXISTS "priority" integer DEFAULT 5 NOT NULL;

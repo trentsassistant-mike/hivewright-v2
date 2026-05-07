@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body{margin:0;padding:20px;background:var(--bg);font-family:var(--font-ui);}
+  table{width:100%;border-collapse:collapse;background:var(--surface-1);border:1px solid var(--stroke);border-radius:var(--r-lg);overflow:hidden;}
+  th,td{text-align:left;padding:10px 14px;font-size:13px;border-top:1px solid var(--stroke);}
+  th{background:var(--surface-2);font-weight:600;color:var(--ivory-500);font-size:11px;letter-spacing:.08em;text-transform:uppercase;border-top:0;}
+  td{color:var(--ivory-200);}
+  .id{font-family:var(--font-mono);color:var(--ivory-300);}
+  .right{text-align:right;font-variant-numeric:tabular-nums;}
+  .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:8px;vertical-align:middle;}
+  .ok{color:var(--sage-300);}
+  .ok .dot{background:var(--sage-400);}
+  .fail{color:var(--ember-400);}
+  .fail .dot{background:var(--ember-500);}
+  .run{color:var(--honey-300);}
+  .run .dot{background:var(--honey-500);box-shadow:0 0 8px var(--honey-500);}
+</style></head><body>
+<table>
+  <thead><tr><th>Run</th><th>Workflow</th><th>Status</th><th class="right">Latency</th><th class="right">Started</th></tr></thead>
+  <tbody>
+    <tr><td class="id">run_4823</td><td>Invoice triage</td><td class="ok"><span class="dot"></span>OK</td><td class="right">1.2s</td><td class="right">12:04:21</td></tr>
+    <tr><td class="id">run_4822</td><td>Lead enrich</td><td class="run"><span class="dot"></span>Running</td><td class="right">—</td><td class="right">12:04:18</td></tr>
+    <tr><td class="id">run_4821</td><td>Vendor sync</td><td class="ok"><span class="dot"></span>OK</td><td class="right">4.7s</td><td class="right">12:03:50</td></tr>
+    <tr><td class="id">run_4820</td><td>Inbox triage</td><td class="fail"><span class="dot"></span>Failed</td><td class="right">920ms</td><td class="right">12:03:42</td></tr>
+  </tbody>
+</table>
+</body></html>

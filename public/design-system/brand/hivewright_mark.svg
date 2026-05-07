@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
+  <defs>
+    
+    <linearGradient id="hexFace" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFD56A"></stop>
+      <stop offset="22%" stop-color="#F0A416"></stop>
+      <stop offset="50%" stop-color="#9A5400"></stop>
+      <stop offset="78%" stop-color="#F0A416"></stop>
+      <stop offset="100%" stop-color="#FFD56A"></stop>
+    </linearGradient>
+    <linearGradient id="hexBevel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFE89A"></stop>
+      <stop offset="50%" stop-color="#E59A1B"></stop>
+      <stop offset="100%" stop-color="#5C3206"></stop>
+    </linearGradient>
+    <linearGradient id="hLetter" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFE89A"></stop>
+      <stop offset="38%" stop-color="#FFB836"></stop>
+      <stop offset="62%" stop-color="#9A5400"></stop>
+      <stop offset="100%" stop-color="#FFD56A"></stop>
+    </linearGradient>
+    <radialGradient id="hexGlow" cx="0.5" cy="0.5" r="0.6">
+      <stop offset="0%" stop-color="#FFB836" stop-opacity="0.55"></stop>
+      <stop offset="60%" stop-color="#E59A1B" stop-opacity="0.10"></stop>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"></stop>
+    </radialGradient>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="blur"></feGaussianBlur>
+      <feMerge><feMergeNode in="blur"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge>
+    </filter>
+  </defs>
+
+  
+  <circle cx="120" cy="120" r="118" fill="url(#hexGlow)"></circle>
+
+  
+  <polygon points="120,12 211,64 211,176 120,228 29,176 29,64" fill="url(#hexBevel)" stroke="#FFE89A" stroke-width="0.5" opacity="0.95"></polygon>
+
+  
+  <polygon points="120,28 197,72 197,168 120,212 43,168 43,72" fill="url(#hexFace)" stroke="#FFE89A" stroke-width="1" stroke-opacity="0.5"></polygon>
+
+  
+  <polygon points="120,28 197,72 197,168 120,212 43,168 43,72" fill="none" stroke="#000" stroke-width="1.5" stroke-opacity="0.35"></polygon>
+
+  
+  <g filter="url(#softGlow)">
+    
+    <path d="M 84 70 L 104 70 L 104 170 L 84 170 Z" fill="url(#hLetter)" stroke="#FFE89A" stroke-width="0.8"></path>
+    
+    <path d="M 136 70 L 156 70 L 156 170 L 136 170 Z" fill="url(#hLetter)" stroke="#FFE89A" stroke-width="0.8"></path>
+    
+    <path d="M 84 110 L 156 110 L 156 130 L 84 130 Z" fill="url(#hLetter)" stroke="#FFE89A" stroke-width="0.8"></path>
+    
+    <path d="M 88 113 L 152 113 L 152 116 L 88 116 Z" fill="#FFE89A" opacity="0.55"></path>
+  </g>
+
+  
+  <rect x="86" y="72" width="3" height="96" fill="#FFE89A" opacity="0.65"></rect>
+  <rect x="138" y="72" width="3" height="96" fill="#FFE89A" opacity="0.65"></rect>
+
+  
+  <g stroke="#FFE89A" stroke-width="0.5" opacity="0.35" fill="none">
+    <line x1="120" y1="4" x2="120" y2="14"></line>
+    <line x1="120" y1="226" x2="120" y2="236"></line>
+    <circle cx="120" cy="120" r="92" stroke-dasharray="1 4"></circle>
+  </g>
+</svg>
