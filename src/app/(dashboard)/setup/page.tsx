@@ -31,6 +31,11 @@ const setupLinks = [
     title: "Setup Health",
     description: "Readiness checks across hives, runtime, models, memory, and connectors.",
   },
+  {
+    href: "/setup/updates",
+    title: "Updates",
+    description: "Version, Git remote status, terminal update command, and owner-triggered HiveWright updates.",
+  },
 ];
 
 export default function SetupPage() {

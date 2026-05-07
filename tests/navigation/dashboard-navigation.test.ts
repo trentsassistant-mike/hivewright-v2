@@ -34,6 +34,11 @@ describe("dashboard navigation model", () => {
       label: "Global Settings",
       groupId: "global",
     });
+    expect(links.find((link) => link.id === "updates")).toMatchObject({
+      href: "/setup/updates",
+      label: "Updates",
+      groupId: "setup",
+    });
     expect(links.map((link) => link.href).filter((href) => href.startsWith("/settings"))).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "hivewrightv2",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -34,7 +34,8 @@
     "test:setup-db": "tsx scripts/setup-test-db.ts",
     "notifier:verify": "tsx scripts/verify-outbound-notifier.ts",
     "notifier:live-smoke": "tsx scripts/send-outbound-notifier-live-smoke.ts",
-    "build:dispatcher": "esbuild src/dispatcher/index.ts --bundle --platform=node --format=cjs --outfile=dispatcher-bundle.js --external:postgres --external:chokidar --external:discord.js --external:@discordjs/* --external:zlib-sync"
+    "build:dispatcher": "esbuild src/dispatcher/index.ts --bundle --platform=node --format=cjs --outfile=dispatcher-bundle.js --external:postgres --external:chokidar --external:discord.js --external:@discordjs/* --external:zlib-sync",
+    "hivewright:update": "tsx scripts/update-hivewright.ts"
   },
   "dependencies": {
     "@auth/core": "^0.41.2",

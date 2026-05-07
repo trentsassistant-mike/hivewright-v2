@@ -151,6 +151,7 @@ export function buildDashboardNavigation({
         { id: "connectors", href: "/setup/connectors", label: "Connectors" },
         { id: "setup-health", href: "/setup/health", label: "Setup Health" },
         { id: "embedding-settings", href: "/setup/embeddings", label: "Embedding settings" },
+        { id: "updates", href: "/setup/updates", label: "Updates" },
       ],
     },
     {

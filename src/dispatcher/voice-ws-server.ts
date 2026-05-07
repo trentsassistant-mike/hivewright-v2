@@ -1,5 +1,6 @@
 import { WebSocketServer } from "ws";
-import { createServer, type Server as HttpServer } from "node:http";
+import * as http from "node:http";
+import type { Server as HttpServer } from "node:http";
 import type { Sql } from "postgres";
 import { mountDirectWsHandler } from "@/connectors/voice/direct-ws";
 
@@ -29,7 +30,7 @@ export function startVoiceWsServer(sql: Sql, port: number): VoiceWsHandle {
   // noServer mode so we can route on URL path before deciding to upgrade.
   const wss = new WebSocketServer({ noServer: true });
 
-  const server = createServer((_req, res) => {
+  const server = http.createServer((_req, res) => {
     res.statusCode = 426;
     res.end("upgrade required");
   });
