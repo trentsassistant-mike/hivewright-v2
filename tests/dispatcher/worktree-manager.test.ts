@@ -13,7 +13,7 @@ import { buildSessionContext } from "@/dispatcher/session-builder";
 import { syncRoleLibrary } from "@/roles/sync";
 import type { SessionContext } from "@/adapters/types";
 import type { ClaimedTask } from "@/dispatcher/types";
-import { testSql as sql, truncateAll } from "../_lib/test-db";
+import { seedTestModelRoutingForHive, testSql as sql, truncateAll } from "../_lib/test-db";
 
 let tempDirs: string[] = [];
 let hiveId: string;
@@ -113,6 +113,7 @@ beforeEach(async () => {
     RETURNING id
   `;
   hiveId = hive.id;
+  await seedTestModelRoutingForHive(hiveId, sql);
 });
 
 afterEach(() => {

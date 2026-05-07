@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import os from "os";
+import path from "path";
 
 vi.mock("fs", () => ({
   default: { mkdirSync: vi.fn() },
@@ -25,6 +27,9 @@ import { requireApiUser } from "../_lib/auth";
 const mockSql = sql as unknown as ReturnType<typeof vi.fn>;
 const mockMkdirSync = fs.mkdirSync as unknown as ReturnType<typeof vi.fn>;
 const mockRequireApiUser = requireApiUser as unknown as ReturnType<typeof vi.fn>;
+const TEST_HIVES_ROOT = path.join(os.tmpdir(), "hw-hives-route-test");
+const configuredHivePath = (slug: string, leaf: "projects" | "skills" | "ea") =>
+  path.join(TEST_HIVES_ROOT, slug, leaf);
 
 function hiveCreateRequest(slug: string) {
   return new Request("http://localhost/api/hives", {
@@ -40,7 +45,7 @@ function hiveCreateRequest(slug: string) {
 describe("POST /api/hives", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete process.env.HIVES_WORKSPACE_ROOT;
+    process.env.HIVES_WORKSPACE_ROOT = TEST_HIVES_ROOT;
     mockRequireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
@@ -97,9 +102,9 @@ describe("POST /api/hives", () => {
       slug: "valid-hive",
       type: "business",
     });
-    expect(mockMkdirSync).toHaveBeenCalledWith("/home/example/hives/valid-hive/projects", { recursive: true });
-    expect(mockMkdirSync).toHaveBeenCalledWith("/home/example/hives/valid-hive/skills", { recursive: true });
-    expect(mockMkdirSync).toHaveBeenCalledWith("/home/example/hives/valid-hive/ea", { recursive: true });
+    expect(mockMkdirSync).toHaveBeenCalledWith(configuredHivePath("valid-hive", "projects"), { recursive: true });
+    expect(mockMkdirSync).toHaveBeenCalledWith(configuredHivePath("valid-hive", "skills"), { recursive: true });
+    expect(mockMkdirSync).toHaveBeenCalledWith(configuredHivePath("valid-hive", "ea"), { recursive: true });
   });
 
   it("uses HIVES_WORKSPACE_ROOT for new hive project paths when configured", async () => {
@@ -125,7 +130,7 @@ describe("POST /api/hives", () => {
 describe("GET /api/hives", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete process.env.HIVES_WORKSPACE_ROOT;
+    process.env.HIVES_WORKSPACE_ROOT = TEST_HIVES_ROOT;
     mockRequireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
@@ -152,7 +157,7 @@ describe("GET /api/hives", () => {
       name: "Member Hive",
       type: "business",
       description: null,
-      workspace_path: "/home/example/hives/member-hive/projects",
+      workspace_path: configuredHivePath("member-hive", "projects"),
       is_system_fixture: false,
       created_at: "2026-04-27T00:00:00.000Z",
     }]);
@@ -167,7 +172,7 @@ describe("GET /api/hives", () => {
       name: "Member Hive",
       type: "business",
       description: null,
-      workspacePath: "/home/example/hives/member-hive/projects",
+      workspacePath: configuredHivePath("member-hive", "projects"),
       isSystemFixture: false,
       createdAt: "2026-04-27T00:00:00.000Z",
     }]);

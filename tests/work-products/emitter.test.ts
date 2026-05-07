@@ -211,6 +211,8 @@ describe("emitWorkProduct", () => {
     expect(wp!.content).toContain(tailMarker);
     expect(wp!.summary).toContain(tailMarker);
     expect(qaTask!.brief).toContain("### Work Product / Completed Deliverable");
-    expect(qaTask!.brief).toContain(tailMarker);
+    expect(qaTask!.brief).toContain("[lean-context]");
+    expect(qaTask!.brief).toContain("Full deliverable evidence remains stored in work_products.summary/content");
+    expect(qaTask!.brief).toContain(`work_products.id: ${wp!.id}`);
   }, 15_000);
 });

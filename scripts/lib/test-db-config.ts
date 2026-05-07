@@ -1,5 +1,5 @@
-import * as os from "node:os";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import postgres from "postgres";
 
@@ -9,6 +9,8 @@ export type TestDatabaseConfig = {
   databaseName: string;
   source: "env" | "auto";
 };
+
+type TestDatabaseEnv = Record<string, string | undefined>;
 
 export const TEST_DB_NAME_PREFIX = "hivewright_test";
 
@@ -24,52 +26,53 @@ export function assertSafeTestDatabaseName(databaseName: string) {
   }
 }
 
-export function buildTestDatabaseConfigFromEnv(env: NodeJS.ProcessEnv = process.env): TestDatabaseConfig | null {
-  if (!env.TEST_DATABASE_URL && !env.TEST_ADMIN_URL) {
-    return null;
-  }
-
-  const testUrl = env.TEST_DATABASE_URL ?? `postgresql://postgres@localhost:5432/${TEST_DB_NAME_PREFIX}`;
-  const adminUrl = env.TEST_ADMIN_URL ?? withDatabase(testUrl, "postgres");
-  const databaseName = databaseNameFromUrl(testUrl);
-  assertSafeTestDatabaseName(databaseName);
-
-  return {
-    adminUrl,
-    testUrl,
-    databaseName,
-    source: "env",
-  };
-}
-
 export function withDatabase(url: string, databaseName: string) {
   const parsed = new URL(url);
   parsed.pathname = `/${databaseName}`;
   return parsed.toString();
 }
 
-export function defaultLocalCandidates(env: NodeJS.ProcessEnv = process.env): TestDatabaseConfig[] {
-  const users = Array.from(new Set([env.USER, os.userInfo().username, "postgres"].filter(Boolean))) as string[];
-  const ports = Array.from(new Set([env.PGPORT, "5432", "5433"].filter(Boolean))) as string[];
+function withPgpassPassword(url: string, env: TestDatabaseEnv = process.env) {
+  const parsed = new URL(url);
+  if (parsed.password) {
+    return parsed.toString();
+  }
 
-  return ports.flatMap((port) => users.map((user) => {
-    const password = pgpassPassword({ host: "localhost", port, database: "postgres", user }, env);
-    const auth = password
-      ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}`
-      : encodeURIComponent(user);
-    const adminUrl = `postgresql://${auth}@localhost:${port}/postgres`;
-    return {
-      adminUrl,
-      testUrl: withDatabase(adminUrl, TEST_DB_NAME_PREFIX),
-      databaseName: TEST_DB_NAME_PREFIX,
-      source: "auto" as const,
-    };
-  }));
+  const host = parsed.hostname || "localhost";
+  const port = parsed.port || "5432";
+  const database = parsed.pathname.replace(/^\//, "") || "postgres";
+  const user = parsed.username || env.PGUSER || env.USER || "postgres";
+  const password = pgpassPassword({ host, port, database, user }, env);
+  if (password) {
+    parsed.username = user;
+    parsed.password = password;
+  }
+  return parsed.toString();
+}
+
+export function buildTestDatabaseConfigFromEnv(env: TestDatabaseEnv = process.env): TestDatabaseConfig | null {
+  if (!env.TEST_DATABASE_URL && !env.TEST_ADMIN_URL) {
+    return null;
+  }
+
+  const testUrl = withPgpassPassword(
+    env.TEST_DATABASE_URL ?? withDatabase(env.TEST_ADMIN_URL!, TEST_DB_NAME_PREFIX),
+    env,
+  );
+  const databaseName = databaseNameFromUrl(testUrl);
+  assertSafeTestDatabaseName(databaseName);
+
+  return {
+    adminUrl: withPgpassPassword(env.TEST_ADMIN_URL ?? withDatabase(testUrl, "postgres"), env),
+    testUrl,
+    databaseName,
+    source: "env",
+  };
 }
 
 function pgpassPassword(
   target: { host: string; port: string; database: string; user: string },
-  env: NodeJS.ProcessEnv = process.env,
+  env: TestDatabaseEnv = process.env,
 ) {
   const pgpassPath = env.PGPASSFILE ?? path.join(os.homedir(), ".pgpass");
   if (!fs.existsSync(pgpassPath)) {
@@ -96,6 +99,33 @@ function pgpassPassword(
   return null;
 }
 
+function adminUrlFor(host: string, port: string, user: string, env: TestDatabaseEnv) {
+  const parsed = new URL("postgresql://localhost/postgres");
+  parsed.hostname = host;
+  parsed.port = port;
+  parsed.username = user;
+  const password = pgpassPassword({ host, port, database: "postgres", user }, env);
+  if (password) {
+    parsed.password = password;
+  }
+  return parsed.toString();
+}
+
+export function defaultLocalCandidates(env: TestDatabaseEnv = process.env): TestDatabaseConfig[] {
+  const ports = Array.from(new Set([env.PGPORT, "5432", "5433"].filter(Boolean))) as string[];
+  const users = Array.from(new Set([env.PGUSER, env.USER, "postgres"].filter(Boolean))) as string[];
+
+  return ports.flatMap((port) => users.map((user) => {
+    const adminUrl = adminUrlFor("localhost", port, user, env);
+    return {
+      adminUrl,
+      testUrl: withDatabase(adminUrl, TEST_DB_NAME_PREFIX),
+      databaseName: TEST_DB_NAME_PREFIX,
+      source: "auto" as const,
+    };
+  }));
+}
+
 async function canConnect(adminUrl: string) {
   const sql = postgres(adminUrl, { max: 1, connect_timeout: 2 });
   try {
@@ -108,7 +138,7 @@ async function canConnect(adminUrl: string) {
   }
 }
 
-export async function resolveTestDatabaseConfig(env: NodeJS.ProcessEnv = process.env): Promise<TestDatabaseConfig> {
+export async function resolveTestDatabaseConfig(env: TestDatabaseEnv = process.env): Promise<TestDatabaseConfig> {
   const explicit = buildTestDatabaseConfigFromEnv(env);
   if (explicit) {
     return explicit;

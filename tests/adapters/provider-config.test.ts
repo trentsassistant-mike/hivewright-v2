@@ -22,12 +22,12 @@ describe("provider-config", () => {
 
   it("returns the verified GPT-5.5 pricing", () => {
     const pricing = getModelPricing("openai/gpt-5.5");
-    expect(pricing).toEqual({ inputPer1k: 0.5, outputPer1k: 3.0 });
+    expect(pricing).toEqual({ inputPer1k: 0.5, cachedInputPer1k: 0.05, outputPer1k: 3.0 });
   });
 
   it("prices the codex GPT-5.5 alias identically to the underlying GPT-5.5 model", () => {
     const pricing = getModelPricing("openai-codex/gpt-5.5");
-    expect(pricing).toEqual({ inputPer1k: 0.5, outputPer1k: 3.0 });
+    expect(pricing).toEqual(getModelPricing("openai/gpt-5.5"));
   });
 
   it("returns the approved Gemini 3.1 Pro Preview pricing", () => {

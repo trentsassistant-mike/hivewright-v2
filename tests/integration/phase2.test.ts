@@ -10,7 +10,7 @@ import { recordTaskCost, checkGoalBudget } from "@/dispatcher/cost-tracker";
 import { calculateCostCents } from "@/adapters/provider-config";
 import { routeToQa, processQaResult } from "@/dispatcher/qa-router";
 import type { ClaimedTask } from "@/dispatcher/types";
-import { testSql as sql, truncateAll } from "../_lib/test-db";
+import { seedTestModelRoutingForHive, testSql as sql, truncateAll } from "../_lib/test-db";
 
 let bizId: string;
 let goalId: string;
@@ -25,6 +25,7 @@ beforeEach(async () => {
     RETURNING *
   `;
   bizId = biz.id;
+  await seedTestModelRoutingForHive(bizId, sql);
 
   const [goal] = await sql`
     INSERT INTO goals (hive_id, title, status, budget_cents, session_id)

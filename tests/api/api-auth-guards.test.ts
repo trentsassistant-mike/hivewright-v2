@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 // Default test bypass in src/app/api/_lib/auth.ts forces isSystemOwner=true,
@@ -20,6 +20,10 @@ vi.mock("next/headers", () => ({
 
 vi.mock("@/auth", () => ({
   auth: async () => (authState.sessionUser ? { user: authState.sessionUser } : null),
+}));
+
+vi.mock("@/software-pipeline/landed-state-gate", () => ({
+  verifyLandedState: vi.fn(async () => ({ ok: true, failures: [] })),
 }));
 
 vi.mock("@/app/api/_lib/auth", async (importOriginal) => {
@@ -81,6 +85,7 @@ import { GET as downloadAttachment } from "@/app/api/attachments/[id]/download/r
 import * as authModule from "@/app/api/_lib/auth";
 import fs from "fs";
 import path from "path";
+import os from "os";
 
 const PREFIX = "auth-guards-";
 const MEMBER_USER_ID = "11111111-2222-4333-8444-555555555555";
@@ -721,14 +726,26 @@ describe("POST /api/dispatcher/restart — privileged role guard", () => {
 
 describe("GET /api/attachments/[id]/download — ownership guard", () => {
   const DL_SLUG = "auth-guards-att-dl";
-  const DL_DIR = path.join(
-    "/home/example/hives",
-    DL_SLUG,
-    "task-attachments",
-    "task-uuid",
-  );
+  const ORIGINAL_HIVES_WORKSPACE_ROOT = process.env.HIVES_WORKSPACE_ROOT;
+  let dlRoot: string;
+  let dlDir: string;
+
+  afterEach(() => {
+    if (ORIGINAL_HIVES_WORKSPACE_ROOT === undefined) {
+      delete process.env.HIVES_WORKSPACE_ROOT;
+    } else {
+      process.env.HIVES_WORKSPACE_ROOT = ORIGINAL_HIVES_WORKSPACE_ROOT;
+    }
+    if (dlRoot && fs.existsSync(dlRoot)) {
+      fs.rmSync(dlRoot, { recursive: true, force: true });
+    }
+  });
 
   async function seedAttachment(): Promise<{ attachmentId: string; filePath: string }> {
+    dlRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hw-auth-guards-att-dl-"));
+    process.env.HIVES_WORKSPACE_ROOT = dlRoot;
+    dlDir = path.join(dlRoot, DL_SLUG, "task-attachments", "task-uuid");
+
     const [biz] = await sql`
       INSERT INTO hives (slug, name, type, workspace_path)
       VALUES (${DL_SLUG}, 'Auth Guards DL', 'digital', '/tmp')
@@ -739,9 +756,8 @@ describe("GET /api/attachments/[id]/download — ownership guard", () => {
       VALUES (${biz.id}, 'dev-agent', 'owner', 't', 'b', false)
       RETURNING id
     `;
-    if (fs.existsSync(DL_DIR)) fs.rmSync(DL_DIR, { recursive: true, force: true });
-    fs.mkdirSync(DL_DIR, { recursive: true });
-    const filePath = path.join(DL_DIR, "fixture.bin");
+    fs.mkdirSync(dlDir, { recursive: true });
+    const filePath = path.join(dlDir, "fixture.bin");
     fs.writeFileSync(filePath, Buffer.from("secret-bytes"));
     const [att] = await sql`
       INSERT INTO task_attachments (task_id, filename, storage_path, mime_type, size_bytes)
@@ -777,7 +793,5 @@ describe("GET /api/attachments/[id]/download — ownership guard", () => {
     expect(res.headers.get("content-type")).toBe("application/octet-stream");
     const bytes = Buffer.from(await res.arrayBuffer());
     expect(bytes.toString("utf8")).toBe("secret-bytes");
-
-    fs.rmSync(`/home/example/hives/${DL_SLUG}`, { recursive: true, force: true });
   });
 });

@@ -3,7 +3,7 @@ import path from "path";
 import { syncRoleLibrary } from "@/roles/sync";
 import { buildSessionContext } from "@/dispatcher/session-builder";
 import type { ClaimedTask } from "@/dispatcher/types";
-import { testSql as sql, truncateAll } from "../_lib/test-db";
+import { seedTestModelRoutingForHive, testSql as sql, truncateAll } from "../_lib/test-db";
 
 const TEST_SLUG = "test-biz-session-att";
 
@@ -42,6 +42,7 @@ beforeEach(async () => {
     RETURNING *
   `;
   bizId = biz.id;
+  await seedTestModelRoutingForHive(bizId, sql);
 });
 
 describe("session-builder: attachments section in brief", () => {

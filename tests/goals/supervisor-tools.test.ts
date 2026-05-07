@@ -1,10 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import * as gate from "@/software-pipeline/landed-state-gate";
 import { executeSupervisorTool, SUPERVISOR_TOOLS } from "@/goals/supervisor-tools";
 import { getGoalPlan } from "@/goals/goal-documents";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
+
+vi.mock("@/software-pipeline/landed-state-gate", () => ({
+  verifyLandedState: vi.fn(),
+}));
 
 let bizId: string;
 let goalId: string;
@@ -15,6 +20,7 @@ beforeEach(async () => {
   const cfgPath = path.join(tmp, "openclaw.json");
   fs.writeFileSync(cfgPath, JSON.stringify({ agents: { list: [] } }));
   process.env.OPENCLAW_CONFIG_PATH = cfgPath;
+  vi.mocked(gate.verifyLandedState).mockResolvedValue({ ok: true, failures: [] });
 
   await truncateAll(sql);
 

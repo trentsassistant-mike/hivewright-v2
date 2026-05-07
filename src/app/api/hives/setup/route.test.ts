@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import os from "os";
+import path from "path";
 
 const mocks = vi.hoisted(() => {
   const tx = Object.assign(vi.fn(), {
@@ -46,6 +48,10 @@ vi.mock("@/credentials/manager", () => ({
 
 import { POST } from "./route";
 
+const TEST_HIVES_ROOT = path.join(os.tmpdir(), "hw-hives-setup-route-test");
+const configuredHivePath = (slug: string, leaf: "projects" | "skills" | "ea") =>
+  path.join(TEST_HIVES_ROOT, slug, leaf);
+
 const connectorDefinition = {
   slug: "discord-webhook",
   name: "Discord webhook",
@@ -66,7 +72,7 @@ function setupRequest(body: Record<string, unknown>) {
 describe("POST /api/hives/setup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete process.env.HIVES_WORKSPACE_ROOT;
+    process.env.HIVES_WORKSPACE_ROOT = TEST_HIVES_ROOT;
     process.env.ENCRYPTION_KEY = "test-encryption-key";
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
@@ -120,9 +126,9 @@ describe("POST /api/hives/setup", () => {
     expect(res.status).toBe(201);
     expect(body.data).toMatchObject({ id: "hive-1", name: "Test Hive", slug: "test-hive", type: "digital" });
     expect(mocks.sql.begin).toHaveBeenCalledTimes(1);
-    expect(mocks.mkdirSync).toHaveBeenCalledWith("/home/example/hives/test-hive/projects", { recursive: true });
-    expect(mocks.mkdirSync).toHaveBeenCalledWith("/home/example/hives/test-hive/skills", { recursive: true });
-    expect(mocks.mkdirSync).toHaveBeenCalledWith("/home/example/hives/test-hive/ea", { recursive: true });
+    expect(mocks.mkdirSync).toHaveBeenCalledWith(configuredHivePath("test-hive", "projects"), { recursive: true });
+    expect(mocks.mkdirSync).toHaveBeenCalledWith(configuredHivePath("test-hive", "skills"), { recursive: true });
+    expect(mocks.mkdirSync).toHaveBeenCalledWith(configuredHivePath("test-hive", "ea"), { recursive: true });
     expect(mocks.seedDefaultSchedules).toHaveBeenCalledWith(mocks.tx, {
       id: "hive-1",
       name: "Test Hive",

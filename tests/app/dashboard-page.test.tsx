@@ -102,12 +102,12 @@ describe("DashboardPage", () => {
         <DashboardPage />
       </QueryClientProvider>,
     );
-    await waitFor(() => expect(screen.getByText("Dashy")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("Dashy").length).toBeGreaterThanOrEqual(1));
     // Owner Brief renders the pending decision title
     await waitFor(() => expect(screen.getByText("Test decision")).toBeTruthy());
     expect(screen.getByText("Waiting on you")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("Operations map")).toBeTruthy());
-    expect(screen.getByText("Dashy relationship view")).toBeTruthy();
+    expect(screen.getByText(/single relationship graph/i)).toBeTruthy();
     expect(screen.getAllByText("Ship mapped goal").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("dev-agent").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("Recent runs")).toBeNull();

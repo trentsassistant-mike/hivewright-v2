@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import os from "os";
+import path from "path";
 
 vi.mock("fs", () => ({
   default: {
@@ -52,12 +54,15 @@ const mockMkdirSync = fs.mkdirSync as unknown as ReturnType<typeof vi.fn>;
 const mockRealpathSync = fs.realpathSync.native as unknown as ReturnType<typeof vi.fn>;
 const mockRequireApiUser = requireApiUser as unknown as ReturnType<typeof vi.fn>;
 const mockCanAccessHive = canAccessHive as unknown as ReturnType<typeof vi.fn>;
+const TEST_HIVES_ROOT = path.join(os.tmpdir(), "hw-project-route-hives");
+const projectRoot = (bizSlug = "my-biz") => path.join(TEST_HIVES_ROOT, bizSlug, "projects");
+const projectPath = (slug = "my-proj", bizSlug = "my-biz") => path.join(projectRoot(bizSlug), slug);
 
 function mockHiveLookup(bizSlug = "my-biz") {
-  mockSql.mockResolvedValueOnce([{ biz_slug: bizSlug, workspace_path: `/home/example/hives/${bizSlug}/projects` }]);
+  mockSql.mockResolvedValueOnce([{ biz_slug: bizSlug, workspace_path: projectRoot(bizSlug) }]);
 }
 
-function mockInsert(workspacePath = "/home/example/hives/my-biz/projects/my-proj") {
+function mockInsert(workspacePath = projectPath()) {
   mockSql.mockResolvedValueOnce([{
     id: "proj-1",
     hive_id: "biz-1",
@@ -80,8 +85,8 @@ function projectRequest(body: Record<string, unknown>) {
 describe("POST /api/projects", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete process.env.HIVES_WORKSPACE_ROOT;
-    mockExistsSync.mockImplementation((p: string) => p === "/home/example/hives/my-biz/projects");
+    process.env.HIVES_WORKSPACE_ROOT = TEST_HIVES_ROOT;
+    mockExistsSync.mockImplementation((p: string) => p === projectRoot());
     mockRealpathSync.mockImplementation((p: string) => p);
     mockRequireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@local", isSystemOwner: true },
@@ -117,7 +122,7 @@ describe("POST /api/projects", () => {
       hiveId: "biz-1",
       slug: "my-proj",
       name: "My Project",
-      workspacePath: "/home/example/hives/my-biz/projects/custom",
+      workspacePath: projectPath("custom"),
     }));
 
     const body = await res.json();
@@ -139,34 +144,34 @@ describe("POST /api/projects", () => {
 
     const body = await res.json();
     expect(res.status).toBe(201);
-    expect(body.data.workspacePath).toBe("/home/example/hives/my-biz/projects/my-proj");
+    expect(body.data.workspacePath).toBe(projectPath());
 
     expect(mockMkdirSync).toHaveBeenCalledWith(
-      "/home/example/hives/my-biz/projects",
+      projectRoot(),
       { recursive: true }
     );
     expect(mockMkdirSync).toHaveBeenCalledWith(
-      "/home/example/hives/my-biz/projects/my-proj",
+      projectPath(),
       { recursive: true }
     );
   });
 
   it("allows system-owner explicit workspacePath only inside the hive projects root", async () => {
     mockHiveLookup();
-    mockInsert("/home/example/hives/my-biz/projects/custom");
+    mockInsert(projectPath("custom"));
 
     const res = await POST(projectRequest({
       hiveId: "biz-1",
       slug: "my-proj",
       name: "My Project",
-      workspacePath: "/home/example/hives/my-biz/projects/custom",
+      workspacePath: projectPath("custom"),
     }));
 
     const body = await res.json();
     expect(res.status).toBe(201);
-    expect(body.data.workspacePath).toBe("/home/example/hives/my-biz/projects/custom");
+    expect(body.data.workspacePath).toBe(projectPath("custom"));
     expect(mockMkdirSync).toHaveBeenCalledWith(
-      "/home/example/hives/my-biz/projects/custom",
+      projectPath("custom"),
       { recursive: true }
     );
   });
@@ -220,7 +225,7 @@ describe("POST /api/projects", () => {
   it("rejects symlink escapes after directory creation", async () => {
     mockHiveLookup();
     mockRealpathSync.mockImplementation((p: string) =>
-      p === "/home/example/hives/my-biz/projects/my-proj" ? "/tmp/escaped" : p
+      p === projectPath() ? "/tmp/escaped" : p
     );
 
     const res = await POST(projectRequest({
@@ -238,18 +243,18 @@ describe("POST /api/projects", () => {
   it("rejects symlink parent escapes before project directory creation", async () => {
     mockHiveLookup();
     mockExistsSync.mockImplementation((p: string) =>
-      p === "/home/example/hives/my-biz/projects" ||
-      p === "/home/example/hives/my-biz/projects/link"
+      p === projectRoot() ||
+      p === projectPath("link")
     );
     mockRealpathSync.mockImplementation((p: string) =>
-      p === "/home/example/hives/my-biz/projects/link" ? "/tmp/escaped-parent" : p
+      p === projectPath("link") ? "/tmp/escaped-parent" : p
     );
 
     const res = await POST(projectRequest({
       hiveId: "biz-1",
       slug: "my-proj",
       name: "My Project",
-      workspacePath: "/home/example/hives/my-biz/projects/link/my-proj",
+      workspacePath: path.join(projectPath("link"), "my-proj"),
     }));
 
     const body = await res.json();
@@ -257,7 +262,7 @@ describe("POST /api/projects", () => {
     expect(body.error).toBe("workspacePath parent resolves outside the hive projects workspace root");
     expect(mockMkdirSync).toHaveBeenCalledTimes(1);
     expect(mockMkdirSync).toHaveBeenCalledWith(
-      "/home/example/hives/my-biz/projects",
+      projectRoot(),
       { recursive: true }
     );
     expect(mockSql).toHaveBeenCalledTimes(1);
@@ -266,11 +271,11 @@ describe("POST /api/projects", () => {
   it("rejects hive projects root symlink escapes before creating the root", async () => {
     mockHiveLookup();
     mockExistsSync.mockImplementation((p: string) =>
-      p === "/home/example/hives" ||
-      p === "/home/example/hives/my-biz"
+      p === TEST_HIVES_ROOT ||
+      p === path.join(TEST_HIVES_ROOT, "my-biz")
     );
     mockRealpathSync.mockImplementation((p: string) =>
-      p === "/home/example/hives/my-biz" ? "/tmp/escaped-hive" : p
+      p === path.join(TEST_HIVES_ROOT, "my-biz") ? "/tmp/escaped-hive" : p
     );
 
     const res = await POST(projectRequest({

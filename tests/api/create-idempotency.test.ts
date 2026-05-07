@@ -7,6 +7,11 @@ let hiveId: string;
 
 beforeEach(async () => {
   await truncateAll(sql);
+  await sql`
+    INSERT INTO role_templates (slug, name, type, adapter_type)
+    VALUES ('dev-agent', 'Dev Agent', 'executor', 'claude-code')
+    ON CONFLICT (slug) DO NOTHING
+  `;
   const [hive] = await sql<{ id: string }[]>`
     INSERT INTO hives (slug, name, type)
     VALUES ('idem-hive', 'Idempotency Hive', 'digital')

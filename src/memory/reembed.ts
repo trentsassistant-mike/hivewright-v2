@@ -433,6 +433,24 @@ function isCompletedConfig(existing: Record<string, unknown>): boolean {
 }
 
 async function hasMissingEmbeddings(sql: Sql): Promise<boolean> {
+  const [columnRow] = await sql<{ exists: boolean }[]>`
+    SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'memory_embeddings'
+        AND column_name = 'embedding'
+    ) AS exists
+  `;
+
+  if (!columnRow?.exists) {
+    const [row] = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count
+      FROM memory_embeddings
+    `;
+    return Number(row?.count ?? 0) > 0;
+  }
+
   const [row] = await sql<{ missing: number }[]>`
     SELECT COUNT(*) FILTER (WHERE embedding IS NULL)::int AS missing
     FROM memory_embeddings

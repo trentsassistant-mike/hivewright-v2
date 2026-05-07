@@ -1,14 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { persistAttachmentsForParent } from "@/attachments/persist";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 const TEST_SLUG = "test-biz-attachment-persist";
-const TEST_BASE = `/home/example/hives/${TEST_SLUG}`;
 const MISSING_TASK_ID = "00000000-0000-0000-0000-000000000404";
+const ORIGINAL_HIVES_WORKSPACE_ROOT = process.env.HIVES_WORKSPACE_ROOT;
 
 let hiveId: string;
+let testRoot: string;
+let testBase: string;
 
 function listFiles(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
@@ -21,10 +24,11 @@ function listFiles(dir: string): string[] {
 }
 
 beforeEach(async () => {
+  testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hw-attachment-persist-"));
+  process.env.HIVES_WORKSPACE_ROOT = testRoot;
+  testBase = path.join(testRoot, TEST_SLUG);
+
   await truncateAll(sql);
-  if (fs.existsSync(TEST_BASE)) {
-    fs.rmSync(TEST_BASE, { recursive: true, force: true });
-  }
 
   const [hive] = await sql`
     INSERT INTO hives (slug, name, type, workspace_path)
@@ -35,8 +39,13 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  if (fs.existsSync(TEST_BASE)) {
-    fs.rmSync(TEST_BASE, { recursive: true, force: true });
+  if (ORIGINAL_HIVES_WORKSPACE_ROOT === undefined) {
+    delete process.env.HIVES_WORKSPACE_ROOT;
+  } else {
+    process.env.HIVES_WORKSPACE_ROOT = ORIGINAL_HIVES_WORKSPACE_ROOT;
+  }
+  if (testRoot && fs.existsSync(testRoot)) {
+    fs.rmSync(testRoot, { recursive: true, force: true });
   }
 });
 
@@ -71,12 +80,12 @@ describe("persistAttachmentsForParent", () => {
   });
 
   it("does not leave an orphan file when attachment metadata insert fails", async () => {
-    const unrelatedDir = path.join(TEST_BASE, "task-attachments", MISSING_TASK_ID);
+    const unrelatedDir = path.join(testBase, "task-attachments", MISSING_TASK_ID);
     const unrelatedFile = path.join(unrelatedDir, "unrelated.txt");
     fs.mkdirSync(unrelatedDir, { recursive: true });
     fs.writeFileSync(unrelatedFile, "keep me");
 
-    const filesBefore = listFiles(TEST_BASE);
+    const filesBefore = listFiles(testBase);
 
     await expect(
       persistAttachmentsForParent(
@@ -95,6 +104,6 @@ describe("persistAttachmentsForParent", () => {
     `;
     expect(rows).toHaveLength(0);
     expect(fs.existsSync(unrelatedFile)).toBe(true);
-    expect(listFiles(TEST_BASE).sort()).toEqual(filesBefore.sort());
+    expect(listFiles(testBase).sort()).toEqual(filesBefore.sort());
   });
 });

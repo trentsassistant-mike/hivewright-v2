@@ -84,6 +84,12 @@ export interface TestDbIsolationLease {
   release(): Promise<void>;
 }
 
+export interface TestModelRoutingFixtureOptions {
+  provider?: string;
+  adapterType?: string;
+  modelId?: string;
+}
+
 let fixtureNamespaceCounter = 0;
 const FIXTURE_RUN_ID = randomUUID();
 const fixtureNamespaceCountersByContext = new Map<string, number>();
@@ -207,6 +213,88 @@ export function createFixtureNamespace(scope: string): FixtureNamespace {
 }
 
 /**
+ * Seed the minimal per-hive model-routing fixture needed by tests that build
+ * dispatcher sessions. Role-library roles now default to automatic routing;
+ * after a DB reset there are intentionally no hive-specific model candidates,
+ * so tests that exercise session construction must opt in to a healthy route.
+ */
+export async function seedTestModelRoutingForHive(
+  hiveId: string,
+  sql = testSql,
+  options: TestModelRoutingFixtureOptions = {},
+): Promise<void> {
+  const provider = options.provider ?? "anthropic";
+  const adapterType = options.adapterType ?? "claude-code";
+  const modelId = options.modelId ?? "anthropic/claude-sonnet-4-6";
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify([
+      "runtime",
+      provider.trim().toLowerCase(),
+      adapterType.trim().toLowerCase(),
+      "",
+    ]))
+    .digest("hex");
+
+  await sql`
+    INSERT INTO hive_models (
+      hive_id,
+      provider,
+      model_id,
+      adapter_type,
+      capabilities,
+      fallback_priority,
+      enabled,
+      benchmark_quality_score,
+      routing_cost_score
+    )
+    VALUES (
+      ${hiveId},
+      ${provider},
+      ${modelId},
+      ${adapterType},
+      ${sql.json(["text", "code"])},
+      1,
+      true,
+      80,
+      20
+    )
+    ON CONFLICT (hive_id, provider, model_id) DO UPDATE SET
+      adapter_type = EXCLUDED.adapter_type,
+      capabilities = EXCLUDED.capabilities,
+      fallback_priority = EXCLUDED.fallback_priority,
+      enabled = EXCLUDED.enabled,
+      benchmark_quality_score = EXCLUDED.benchmark_quality_score,
+      routing_cost_score = EXCLUDED.routing_cost_score,
+      updated_at = NOW()
+  `;
+
+  await sql`
+    INSERT INTO model_health (
+      fingerprint,
+      model_id,
+      status,
+      last_probed_at,
+      next_probe_at,
+      latency_ms
+    )
+    VALUES (
+      ${fingerprint},
+      ${modelId},
+      'healthy',
+      NOW(),
+      NOW() + INTERVAL '1 hour',
+      100
+    )
+    ON CONFLICT (fingerprint, model_id) DO UPDATE SET
+      status = EXCLUDED.status,
+      last_probed_at = EXCLUDED.last_probed_at,
+      next_probe_at = EXCLUDED.next_probe_at,
+      latency_ms = EXCLUDED.latency_ms,
+      updated_at = NOW()
+  `;
+}
+
+/**
  * Acquires an advisory lock that gives a suite exclusive ownership of the
  * shared test database for its full lifetime.
  *
@@ -269,14 +357,14 @@ export async function truncateAll(
 
   if (!preserveReadOnlyTables) {
     roleSeedMayBeMissing = true;
-  } else if (roleSeedMayBeMissing) {
+  } else {
     const [roleSeed] = await sql<{ exists: boolean }[]>`
       SELECT EXISTS (
         SELECT 1 FROM role_templates WHERE slug = 'dev-agent'
       ) AS exists
     `;
 
-    if (!roleSeed?.exists) {
+    if (roleSeedMayBeMissing || !roleSeed?.exists) {
       await syncRoleLibrary(path.resolve(process.cwd(), "role-library"), sql);
       await sql`
         UPDATE role_templates SET concurrency_limit = 50 WHERE slug = 'goal-supervisor'

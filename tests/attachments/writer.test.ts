@@ -1,16 +1,31 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { writeAttachment } from "@/attachments/writer";
 
 const TEST_BIZ_SLUG = "test-biz-writer-unit";
 const TEST_PARENT_ID = "00000000-0000-0000-0000-000000000001";
-const TEST_BASE = `/home/example/hives/${TEST_BIZ_SLUG}`;
+const ORIGINAL_HIVES_WORKSPACE_ROOT = process.env.HIVES_WORKSPACE_ROOT;
+
+let testRoot: string;
+let testBase: string;
 
 describe("writeAttachment", () => {
+  beforeEach(() => {
+    testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hw-attachment-writer-"));
+    process.env.HIVES_WORKSPACE_ROOT = testRoot;
+    testBase = path.join(testRoot, TEST_BIZ_SLUG);
+  });
+
   afterEach(() => {
-    if (fs.existsSync(TEST_BASE)) {
-      fs.rmSync(TEST_BASE, { recursive: true, force: true });
+    if (ORIGINAL_HIVES_WORKSPACE_ROOT === undefined) {
+      delete process.env.HIVES_WORKSPACE_ROOT;
+    } else {
+      process.env.HIVES_WORKSPACE_ROOT = ORIGINAL_HIVES_WORKSPACE_ROOT;
+    }
+    if (testRoot && fs.existsSync(testRoot)) {
+      fs.rmSync(testRoot, { recursive: true, force: true });
     }
   });
 
@@ -28,7 +43,7 @@ describe("writeAttachment", () => {
 
     // Path contains hive slug and task ID
     expect(row.storagePath).toContain(
-      `/home/example/hives/${TEST_BIZ_SLUG}/task-attachments/${TEST_PARENT_ID}/`
+      path.join(testBase, "task-attachments", TEST_PARENT_ID) + path.sep,
     );
     // Filename is uuid-prefixed original name
     expect(path.basename(row.storagePath)).toMatch(

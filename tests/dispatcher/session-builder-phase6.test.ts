@@ -3,7 +3,7 @@ import { buildSessionContext } from "@/dispatcher/session-builder";
 import { storeCredential } from "@/credentials/manager";
 import { syncRoleLibrary } from "@/roles/sync";
 import type { ClaimedTask } from "@/dispatcher/types";
-import { testSql as sql, truncateAll } from "../_lib/test-db";
+import { seedTestModelRoutingForHive, testSql as sql, truncateAll } from "../_lib/test-db";
 import path from "path";
 
 const TEST_KEY = "test-placeholder-key-replace-32ch";
@@ -24,6 +24,7 @@ beforeEach(async () => {
     RETURNING id
   `;
   bizId = biz.id;
+  await seedTestModelRoutingForHive(bizId, sql);
 
   // Create a test-specific role so syncRoleLibrary in parallel tests doesn't stomp our changes
   roleSlug = `${TEST_PREFIX}role`;
@@ -144,6 +145,7 @@ describe("session-builder Phase 6 — skills, credentials, standing instructions
       VALUES (${TEST_PREFIX + "supervisor-hive"}, 'P6 Supervisor Hive', 'digital', '/tmp')
       RETURNING id
     `;
+    await seedTestModelRoutingForHive(hive.id, sql);
 
     await sql`
       INSERT INTO standing_instructions (hive_id, content, affected_departments, confidence)

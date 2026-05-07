@@ -1,9 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import * as gate from "@/software-pipeline/landed-state-gate";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 import { completeGoal } from "../../src/goals/completion";
+
+vi.mock("@/software-pipeline/landed-state-gate", () => ({
+  verifyLandedState: vi.fn(),
+}));
 
 let tmpDir: string;
 let cfgPath: string;
@@ -13,6 +18,7 @@ beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-compprune-"));
   cfgPath = path.join(tmpDir, "openclaw.json");
   process.env.OPENCLAW_CONFIG_PATH = cfgPath;
+  vi.mocked(gate.verifyLandedState).mockResolvedValue({ ok: true, failures: [] });
 });
 
 afterEach(() => {

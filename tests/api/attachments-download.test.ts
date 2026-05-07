@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -6,17 +6,17 @@ import { GET } from "@/app/api/attachments/[id]/download/route";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 const TEST_SLUG = "test-biz-att-dl";
+const ORIGINAL_HIVES_WORKSPACE_ROOT = process.env.HIVES_WORKSPACE_ROOT;
 let bizId: string;
 let taskId: string;
-
-const TEST_DIR = path.join(
-  "/home/example/hives",
-  TEST_SLUG,
-  "task-attachments",
-  "task-uuid",
-);
+let testRoot: string;
+let testDir: string;
 
 beforeEach(async () => {
+  testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hw-attachments-download-"));
+  process.env.HIVES_WORKSPACE_ROOT = testRoot;
+  testDir = path.join(testRoot, TEST_SLUG, "task-attachments", "task-uuid");
+
   await truncateAll(sql);
   const [biz] = await sql`
     INSERT INTO hives (slug, name, type, workspace_path)
@@ -31,18 +31,23 @@ beforeEach(async () => {
   `;
   taskId = task.id as string;
 
-  if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true, force: true });
-  fs.mkdirSync(TEST_DIR, { recursive: true });
+  fs.mkdirSync(testDir, { recursive: true });
 });
 
-afterAll(() => {
-  const hiveRoot = `/home/example/hives/${TEST_SLUG}`;
-  if (fs.existsSync(hiveRoot)) fs.rmSync(hiveRoot, { recursive: true, force: true });
+afterEach(() => {
+  if (ORIGINAL_HIVES_WORKSPACE_ROOT === undefined) {
+    delete process.env.HIVES_WORKSPACE_ROOT;
+  } else {
+    process.env.HIVES_WORKSPACE_ROOT = ORIGINAL_HIVES_WORKSPACE_ROOT;
+  }
+  if (testRoot && fs.existsSync(testRoot)) {
+    fs.rmSync(testRoot, { recursive: true, force: true });
+  }
 });
 
 describe("GET /api/attachments/[id]/download", () => {
   it("streams the file bytes back with correct headers", async () => {
-    const filePath = path.join(TEST_DIR, "fixture.png");
+    const filePath = path.join(testDir, "fixture.png");
     const fileBytes = Buffer.from("fake-png-bytes");
     fs.writeFileSync(filePath, fileBytes);
 
@@ -68,7 +73,7 @@ describe("GET /api/attachments/[id]/download", () => {
   });
 
   it("falls back to application/octet-stream when mime_type is null", async () => {
-    const filePath = path.join(TEST_DIR, "raw.bin");
+    const filePath = path.join(testDir, "raw.bin");
     fs.writeFileSync(filePath, Buffer.from("xyz"));
 
     const [att] = await sql`
@@ -95,7 +100,7 @@ describe("GET /api/attachments/[id]/download", () => {
     expect(response.status).toBe(404);
   });
 
-  it("returns 404 when storage_path resolves outside /home/example/hives", async () => {
+  it("returns 404 when storage_path resolves outside the configured hives workspace root", async () => {
     // Write a fixture in a tmp dir then point the row at it — must be rejected.
     const tmpFile = path.join(os.tmpdir(), "outside-hives.bin");
     fs.writeFileSync(tmpFile, Buffer.from("nope"));
@@ -114,7 +119,7 @@ describe("GET /api/attachments/[id]/download", () => {
   });
 
   it("returns 404 when file is missing on disk", async () => {
-    const phantomPath = path.join(TEST_DIR, "phantom.txt");
+    const phantomPath = path.join(testDir, "phantom.txt");
     // Note: do NOT create the file.
     const [att] = await sql`
       INSERT INTO task_attachments (task_id, filename, storage_path, mime_type, size_bytes)
