@@ -3,6 +3,19 @@ import { sendNotification } from "../notifications/sender";
 import { pruneGoalSupervisor } from "../openclaw/goal-supervisor-cleanup";
 import { verifyLandedState } from "../software-pipeline/landed-state-gate";
 
+export type GoalCompletionStatus = "achieved" | "execution_ready" | "blocked_on_owner_channel";
+
+export function parseGoalCompletionStatus(value: unknown): GoalCompletionStatus | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (value === "achieved" || value === "execution_ready" || value === "blocked_on_owner_channel") return value;
+  return undefined;
+}
+
+export interface CompleteGoalResult {
+  status: GoalCompletionStatus;
+  completed: boolean;
+}
+
 export interface CompleteGoalOptions {
   /** Who initiated the completion. Defaults to 'goal-supervisor'. */
   createdBy?: string;
@@ -10,6 +23,8 @@ export interface CompleteGoalOptions {
   evidenceTaskIds?: string[];
   /** Work product IDs that constitute evidence. */
   evidenceWorkProductIds?: string[];
+  /** Structured final status. Defaults to achieved unless caller explicitly says otherwise. */
+  completionStatus?: GoalCompletionStatus;
 }
 
 export async function completeGoal(
@@ -17,7 +32,7 @@ export async function completeGoal(
   goalId: string,
   completionSummary: string,
   options: CompleteGoalOptions = {},
-): Promise<void> {
+): Promise<CompleteGoalResult> {
   const landed = await verifyLandedState();
   if (!landed.ok) {
     throw new Error(`Goal completion blocked: ${landed.failures.join(", ")}`);
@@ -27,6 +42,7 @@ export async function completeGoal(
   if (!goal) throw new Error(`Goal not found: ${goalId}`);
 
   const createdBy = options.createdBy ?? "goal-supervisor";
+  const completionStatus = options.completionStatus ?? "achieved";
   // Evidence policy: keys are present ONLY when their array is non-empty.
   // A no-evidence completion writes `{}` to the jsonb column (not
   // `{ taskIds: [], workProductIds: [] }`). Downstream readers (the
@@ -40,9 +56,9 @@ export async function completeGoal(
     evidence.workProductIds = options.evidenceWorkProductIds;
   }
 
-  // 1. Mark as achieved and clear session
+  // 1. Mark final status and clear session
   await sql`
-    UPDATE goals SET status = 'achieved', session_id = NULL, updated_at = NOW()
+    UPDATE goals SET status = ${completionStatus}, session_id = NULL, updated_at = NOW()
     WHERE id = ${goalId}
   `;
 
@@ -78,10 +94,14 @@ export async function completeGoal(
     )
   `;
 
+  const memorySummary = completionStatus === "achieved"
+    ? `Goal "${goal.title}" achieved: ${completionSummary}`
+    : `Goal "${goal.title}" status ${completionStatus}: ${completionSummary}`;
+
   // 2. Write completion summary to hive memory
   await sql`
     INSERT INTO hive_memory (hive_id, category, content, confidence, sensitivity)
-    VALUES (${goal.hive_id}, 'general', ${`Goal "${goal.title}" achieved: ${completionSummary}`}, 1.0, 'internal')
+    VALUES (${goal.hive_id}, 'general', ${memorySummary}, 1.0, 'internal')
   `;
 
   // 3. Write audit row to goal_completions
@@ -97,9 +117,11 @@ export async function completeGoal(
   await sendNotification(sql, {
     // postgres-js returns untyped rows; hive_id is uuid NOT NULL per schema.
     hiveId: goal.hive_id as string,
-    title: `Goal achieved: ${goal.title}`,
+    title: `Goal status ${completionStatus}: ${goal.title}`,
     message: completionSummary,
     priority: "normal",
     source: "goal-completion",
   });
+
+  return { status: completionStatus, completed: true };
 }

@@ -1,13 +1,15 @@
 import { sql } from "../../../_lib/db";
 import { jsonOk, jsonError } from "../../../_lib/responses";
 import { requireApiUser } from "../../../_lib/auth";
-import { completeGoal } from "@/goals/completion";
+import { completeGoal, parseGoalCompletionStatus } from "@/goals/completion";
 
 interface CompleteGoalBody {
   summary?: unknown;
   evidenceTaskIds?: unknown;
   evidenceWorkProductIds?: unknown;
   createdBy?: unknown;
+  completionStatus?: unknown;
+  completion_status?: unknown;
 }
 
 function isStringArray(v: unknown): v is string[] {
@@ -57,6 +59,12 @@ export async function POST(
       }
     }
 
+    const completionStatusInput = body.completionStatus ?? body.completion_status;
+    const completionStatus = parseGoalCompletionStatus(completionStatusInput);
+    if (completionStatusInput !== undefined && !completionStatus) {
+      return jsonError("'completionStatus' must be one of achieved, execution_ready, blocked_on_owner_channel", 400);
+    }
+
     const [goal] = await sql`
       SELECT id, status, session_id FROM goals WHERE id = ${id}
     `;
@@ -79,7 +87,8 @@ export async function POST(
     // an out-of-band cancellation should not be able to resurrect the goal as
     // achieved. Only 'active' goals proceed to completion; 'achieved' goals
     // hit the idempotent branch below.
-    if (goal.status !== "active" && goal.status !== "achieved") {
+    const finalStatuses = ["achieved", "execution_ready", "blocked_on_owner_channel"];
+    if (goal.status !== "active" && !finalStatuses.includes(goal.status as string)) {
       return jsonError(
         `Goal cannot be completed: current status is '${goal.status}'`,
         409,
@@ -88,7 +97,7 @@ export async function POST(
 
     // Idempotency: already-achieved goals return current state without
     // re-running completeGoal (avoids double memory writes + double notifications).
-    if (goal.status === "achieved") {
+    if (finalStatuses.includes(goal.status as string)) {
       const [latestCompletion] = await sql`
         SELECT id, summary, evidence, created_by, created_at
         FROM goal_completions
@@ -98,18 +107,19 @@ export async function POST(
       `;
       return jsonOk({
         goalId: id,
-        status: "achieved",
+        status: goal.status,
         idempotent: true,
         latestCompletion: latestCompletion ?? null,
       });
     }
 
-    await completeGoal(sql, id, summary, {
+    const completionResult = await completeGoal(sql, id, summary, {
       createdBy: typeof body.createdBy === "string" ? body.createdBy : "goal-supervisor",
       evidenceTaskIds: isStringArray(body.evidenceTaskIds) ? body.evidenceTaskIds : undefined,
       evidenceWorkProductIds: isStringArray(body.evidenceWorkProductIds)
         ? body.evidenceWorkProductIds
         : undefined,
+      ...(completionStatus ? { completionStatus } : {}),
     });
 
     // Re-read the audit row we just wrote so the response shape is symmetric
@@ -125,7 +135,7 @@ export async function POST(
 
     return jsonOk({
       goalId: id,
-      status: "achieved",
+      status: completionResult.status,
       idempotent: false,
       latestCompletion: latestCompletion ?? null,
     });

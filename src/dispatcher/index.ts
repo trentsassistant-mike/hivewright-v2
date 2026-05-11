@@ -731,7 +731,7 @@ export class Dispatcher {
 
       if (!route.canRun) {
         const reason = [
-          "Runtime health gate blocked task before spawn.",
+          "runtime_blocked: Runtime health gate blocked task before spawn.",
           `Resolved route: ${route.adapterType}/${route.model}.`,
           `Reason: ${route.reason}.`,
         ].join(" ");
@@ -1198,12 +1198,9 @@ export class Dispatcher {
           console.log(`[dispatcher] QA task ${task.id} verdict: FAIL`);
           await processQaResult(this.sql, task.parentTaskId, { passed: false, feedback });
         } else {
-          // No explicit verdict on its own line — distinguish "blocked" from "ambiguous"
-          const lower = result.output.toLowerCase();
-          const blockedPattern = /\bcould not\b|\bunable to\b|\bno (work product|deliverable|file|access)\b|\bpermission denied\b/;
-          const reason = blockedPattern.test(lower) ? "blocked" : "ambiguous verdict";
-          console.log(`[dispatcher] QA task ${task.id} ${reason} — treating as FAIL so parent retries.`);
-          await processQaResult(this.sql, task.parentTaskId, { passed: false, feedback: `QA ${reason}: ${feedback}` });
+          const reason = `parser_unknown: QA output did not contain an explicit pass/fail verdict. ${feedback}`;
+          console.log(`[dispatcher] QA task ${task.id} produced no trusted verdict — blocking parent instead of triggering quality rework.`);
+          await processQaResult(this.sql, task.parentTaskId, { passed: false, feedback: reason, failureClass: "parser_unknown" });
         }
         await completeTask(this.sql, task.id, result.output, completionOptions);
         console.log(`[dispatcher] QA task ${task.id} completed.`);

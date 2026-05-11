@@ -229,6 +229,14 @@ export async function buildSessionContext(
     }
   }
 
+  const isQaReviewTask = (role.slug === "qa" || task.title.startsWith("[QA]"));
+  const isQaReplanTask = task.title.startsWith("[Replan] QA failed repeatedly");
+  const contextPolicy = isQaReviewTask || isQaReplanTask
+    ? { mode: "lean" as const, reason: "review_replan_cost_control" as const }
+    : (role.type as string | null) === "executor"
+      ? { mode: "lean" as const, reason: "executor_default" as const }
+      : { mode: "full" as const, reason: "non_executor" as const };
+
   return {
     task: taskWithAttachments,
     roleTemplate,
@@ -248,9 +256,7 @@ export async function buildSessionContext(
     fallbackAdapterType,
     credentials,
     toolsConfig,
-    contextPolicy: (role.type as string | null) === "executor"
-      ? { mode: "lean", reason: "executor_default" }
-      : { mode: "full", reason: "non_executor" },
+    contextPolicy,
   };
 }
 

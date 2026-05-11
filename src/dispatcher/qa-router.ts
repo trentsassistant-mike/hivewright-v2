@@ -281,7 +281,8 @@ export async function routeToQa(
     "",
     "### Your Job",
     "Review the deliverable against the acceptance criteria.",
-    "Output: `pass` or `fail` with specific issues.",
+    "First non-empty line must be exactly `pass` or `fail`.",
+    "Then provide only concise evidence/issue notes needed for the parent task.",
   ].join("\n");
 
   const [qaTask] = await sql`
@@ -324,9 +325,13 @@ function renderQaDeliverableReference(
   ].join("\n");
 }
 
+export type QaFailureClass = "quality_fail" | "runtime_blocked" | "parser_unknown";
+
 export interface QaResult {
   passed: boolean;
   feedback: string | null;
+  /** Trusted dispatcher classification. Never infer this from untrusted QA text. */
+  failureClass?: QaFailureClass;
 }
 
 export type QaVerdict = "pass" | "fail" | "unknown";
@@ -347,7 +352,7 @@ export function parseQaVerdict(output: string): QaVerdict {
       .toLowerCase();
 
   const verdictToken = /^(pass(?:ed)?|fail(?:ed)?)$/;
-  const prefixed = /^(?:verdict|result|outcome|overall|status|conclusion|final)\s*[:=\-–—]?\s*(pass(?:ed)?|fail(?:ed)?)\b/;
+  const prefixed = /^(?:qa\s+)?(?:verdict|result|outcome|overall|status|conclusion|final)\s*[:=\-–—]?\s*(pass(?:ed)?|fail(?:ed)?)\b/;
 
   let last: QaVerdict = "unknown";
   for (const raw of lines) {
@@ -387,6 +392,21 @@ export async function processQaResult(
     const [task] = await sql`SELECT brief, retry_count, goal_id FROM tasks WHERE id = ${taskId}`;
     const retryCount = (task?.retry_count as number) || 0;
     const QA_RETRY_CAP = 2;
+    const failureClass = result.failureClass ?? "quality_fail";
+
+    if (failureClass !== "quality_fail") {
+      const reason = `${failureClass}: ${result.feedback ?? "QA/review could not produce a trusted quality verdict."}`;
+      await sql`
+        UPDATE tasks
+        SET status = 'blocked',
+            failure_reason = ${reason},
+            result_summary = ${reason},
+            updated_at = NOW()
+        WHERE id = ${taskId}
+      `;
+      await markCapsuleQaFailed(sql, { taskId, feedback: reason });
+      return;
+    }
 
     if (retryCount >= QA_RETRY_CAP) {
       await markCapsuleQaFailed(sql, { taskId, feedback: result.feedback });
@@ -402,7 +422,8 @@ export async function processQaResult(
         await createDirectTaskQaCapDecision(sql, taskId, result.feedback, QA_RETRY_CAP);
       }
     } else {
-      const updatedBrief = `${task.brief}\n\n## QA Feedback (Rework Required - attempt ${retryCount + 1}/${QA_RETRY_CAP})\n${result.feedback}`;
+      const qaDelta = result.feedback ?? "No QA feedback captured.";
+      const updatedBrief = `${task.brief}\n\n## QA Feedback (Rework Required - attempt ${retryCount + 1}/${QA_RETRY_CAP})\n[lean-context] Address only this QA delta, then update or replace the latest work-product evidence. Do not replay the full prior transcript.\n${qaDelta}`;
       await sql`
         UPDATE tasks
         SET status = 'pending', brief = ${updatedBrief}, retry_count = ${retryCount + 1}, retry_after = NULL, updated_at = NOW()

@@ -4,7 +4,7 @@ import type { SupervisorTool } from "./types";
 import { emitDecisionEvent } from "../dispatcher/event-emitter";
 import { parkTaskIfRecoveryBudgetExceeded } from "../recovery/recovery-budget";
 import { upsertGoalPlan } from "./goal-documents";
-import { completeGoal } from "./completion";
+import { completeGoal, parseGoalCompletionStatus } from "./completion";
 
 export const SUPERVISOR_TOOLS: SupervisorTool[] = [
   {
@@ -87,9 +87,13 @@ export const SUPERVISOR_TOOLS: SupervisorTool[] = [
   },
   {
     name: "mark_goal_achieved",
-    description: "Mark the current goal as achieved",
+    description: "Record the current goal's final status. Use blocked_on_owner_channel when work is ready but owner-controlled channel/action remains.",
     parameters: {
       summary: { type: "string", description: "Completion summary", required: true },
+      completion_status: {
+        type: "string",
+        description: "Optional final status: achieved, execution_ready, blocked_on_owner_channel",
+      },
     },
   },
   {
@@ -287,8 +291,13 @@ export async function executeSupervisorTool(
       if (!summary || summary.trim().length === 0) {
         return { success: false, message: "mark_goal_achieved requires non-empty summary" };
       }
-      await completeGoal(sql, goalId, summary);
-      return { success: true, message: "Goal marked as achieved" };
+      const completionStatusInput = args.completion_status ?? args.completionStatus;
+      const completionStatus = parseGoalCompletionStatus(completionStatusInput);
+      if (completionStatusInput !== undefined && !completionStatus) {
+        return { success: false, message: "completion_status must be one of achieved, execution_ready, blocked_on_owner_channel" };
+      }
+      const result = await completeGoal(sql, goalId, summary, completionStatus ? { completionStatus } : {});
+      return { success: true, message: `Goal status ${result.status}` };
     }
     case "get_role_library": {
       const roles = await sql`

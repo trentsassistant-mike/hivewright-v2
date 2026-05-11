@@ -76,7 +76,7 @@ export interface SessionContext {
    */
   contextPolicy?: {
     mode: "lean" | "full";
-    reason: "executor_default" | "non_executor" | "explicit";
+    reason: "executor_default" | "non_executor" | "explicit" | "review_replan_cost_control";
   };
 }
 
