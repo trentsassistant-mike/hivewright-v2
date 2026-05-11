@@ -27,6 +27,7 @@ type ProjectSetup = {
   name: string;
   slug: string;
   workspacePath?: string;
+  gitRepo?: boolean;
 };
 
 type OperatingPreferences = {
@@ -91,6 +92,10 @@ function createHiveDirectories(slug: string) {
 
 function createProjectDirectory(workspacePath: string) {
   fs.mkdirSync(workspacePath, { recursive: true });
+}
+
+function isGitRepository(workspacePath: string): boolean {
+  return fs.existsSync(path.join(workspacePath, ".git"));
 }
 
 function plainSetupError(err: unknown): string {
@@ -312,9 +317,12 @@ export async function POST(request: Request) {
           hiveProjectsRoot,
         );
         createProjectDirectory(projectWorkspacePath);
+        if (project.gitRepo === true && !isGitRepository(projectWorkspacePath)) {
+          throw new Error("Git-backed projects must point at an existing Git repository.");
+        }
         await tx`
           INSERT INTO projects (hive_id, slug, name, workspace_path, git_repo)
-          VALUES (${hiveId}, ${project.slug}, ${project.name}, ${projectWorkspacePath}, true)
+          VALUES (${hiveId}, ${project.slug}, ${project.name}, ${projectWorkspacePath}, ${project.gitRepo === true})
         `;
       }
 

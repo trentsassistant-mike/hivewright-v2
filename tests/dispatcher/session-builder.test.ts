@@ -181,6 +181,38 @@ describe("buildSessionContext", () => {
     expect(ctx.contextPolicy).toEqual({ mode: "lean", reason: "executor_default" });
   });
 
+  it("uses lean context for QA/replan system review tasks to prevent transcript replay", async () => {
+    await sql`
+      INSERT INTO role_templates (slug, name, type, adapter_type, recommended_model)
+      VALUES ('qa', 'QA Reviewer', 'qa', 'claude-code', 'anthropic/claude-sonnet-4-6')
+      ON CONFLICT (slug) DO UPDATE SET type = 'qa', adapter_type = 'claude-code', recommended_model = 'anthropic/claude-sonnet-4-6'
+    `;
+
+    const task: ClaimedTask = {
+      id: "00000000-0000-0000-0000-0000000000aa",
+      hiveId: bizId,
+      assignedTo: "qa",
+      createdBy: "dispatcher",
+      status: "active",
+      priority: 5,
+      title: "[QA] Review latest deliverable",
+      brief: "Verify latest evidence only",
+      parentTaskId: "00000000-0000-0000-0000-0000000000ab",
+      goalId: null,
+      sprintNumber: null,
+      qaRequired: false,
+      acceptanceCriteria: null,
+      retryCount: 0,
+      doctorAttempts: 0,
+      failureReason: null,
+      projectId: null,
+    };
+
+    const ctx = await buildSessionContext(sql, task);
+
+    expect(ctx.contextPolicy).toEqual({ mode: "lean", reason: "review_replan_cost_control" });
+  });
+
   it("resolves auto role routing from configured hive models and health", async () => {
     const fingerprint = createRuntimeCredentialFingerprint({
       provider: "openai",

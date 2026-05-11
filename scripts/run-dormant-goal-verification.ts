@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
 import postgres from "postgres";
 
-const TEST_DB_NAME_PREFIX = "hivewright_test";
-const DEFAULT_TEST_DB_URL = `postgresql://hivewright:hivewright@localhost:5432/${TEST_DB_NAME_PREFIX}`;
-const DEFAULT_ADMIN_URL = "postgresql://hivewright:hivewright@localhost:5432/postgres";
+const TEST_DB_NAME_PREFIX = "hivewrightv2_test";
+const DEFAULT_TEST_DB_URL = `postgresql://hivewright:placeholder@localhost:5432/${TEST_DB_NAME_PREFIX}`;
+const DEFAULT_ADMIN_URL = "postgresql://hivewright:placeholder@localhost:5432/postgres";
 const VITEST_FILES = [
   "tests/api/work-internal-auth.test.ts",
   "tests/initiative-engine/follow-up-submission-auth-path.test.ts",

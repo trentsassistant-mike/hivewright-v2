@@ -487,7 +487,7 @@ describe("resolveConfiguredModelRoute", () => {
     expect(route.reason).toContain("no enabled candidates");
   });
 
-  it("blocks unknown and unhealthy registry-derived candidates", () => {
+  it("blocks unknown, unhealthy, and stale registry-derived candidates", () => {
     const policy: ModelRoutingPolicy = {
       preferences: { costQualityBalance: 50 },
       candidates: [
@@ -504,6 +504,14 @@ describe("resolveConfiguredModelRoute", () => {
           status: "unhealthy",
           qualityScore: 99,
           costScore: 0,
+        },
+        {
+          adapterType: "claude-code",
+          model: "anthropic/claude-sonnet-4-6",
+          status: "healthy",
+          probeFreshness: "due",
+          qualityScore: 99,
+          costScore: 5,
         },
       ],
     };

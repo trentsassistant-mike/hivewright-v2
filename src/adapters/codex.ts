@@ -1,4 +1,6 @@
 import { spawn } from "child_process";
+import * as fs from "fs";
+import * as os from "os";
 import path from "path";
 import type { Sql } from "postgres";
 import type { Adapter, AdapterProbeCredential, AdapterResult, ChunkCallback, CodexEmptyOutputDiagnostic, ProbeResult, SessionContext } from "./types";
@@ -124,6 +126,7 @@ export class CodexAdapter implements Adapter {
     const prompt = this.translate(ctx);
     const args = this.buildCommand(ctx);
     const cwd = resolveCodexEffectiveWorkspace(ctx) || process.cwd();
+    ensureCodexWorkspace(cwd);
 
     return this.runCodexProcess({ prompt, args, cwd, ctx, onChunk });
   }
@@ -144,6 +147,7 @@ export class CodexAdapter implements Adapter {
       "-",
     ];
     const cwd = resolveCodexEffectiveWorkspace(ctx) || process.cwd();
+    ensureCodexWorkspace(cwd);
 
     return this.runCodexProcess({
       prompt: message,
@@ -242,6 +246,7 @@ export class CodexAdapter implements Adapter {
         const result = tail.result;
         const sessionId = tail.threadId ?? existingSessionId ?? null;
         const allTexts = collectCodexAgentTexts(rawStdout);
+        const finalOutput = collectCodexFinalAgentText(rawStdout) || allTexts;
         const rolloutRegistrationFailed = isCodexRolloutRegistrationFailure(stderr || rawStdout);
         const rolloutRegistrationStderrSignaturePresent = isCodexRolloutRegistrationFailure(stderr);
         const rolloutWarning = rolloutRegistrationFailed
@@ -326,7 +331,7 @@ export class CodexAdapter implements Adapter {
         if (result) {
           resolve({
             success: !result.isError,
-            output: allTexts || rawStdout,
+            output: finalOutput || rawStdout,
             sessionId,
             runtimeWarnings: rolloutWarning ? [rolloutWarning] : undefined,
             tokensInput: result.tokensInput,
@@ -341,7 +346,7 @@ export class CodexAdapter implements Adapter {
         // No turn.completed envelope captured — degraded fallback.
         resolve({
           success: true,
-          output: allTexts || rawStdout,
+          output: finalOutput || rawStdout,
           sessionId,
           runtimeWarnings: rolloutWarning ? [rolloutWarning] : undefined,
         });
@@ -410,11 +415,11 @@ const CODEX_EMPTY_OUTPUT_TRUNCATION_MARKER =
   "[...TRUNCATED_CODEX_EMPTY_OUTPUT_DIAGNOSTIC_8192_BYTES]" as const;
 
 /**
- * When dispatcher-owned per-task isolation is active and a worktree was
- * provisioned, codex must operate inside that worktree so its git ops don't
- * race the canonical tree. Any other state (no isolation, skipped, failed,
- * or active without a worktreePath) falls through to the canonical
- * projectWorkspace so behaviour is unchanged for sessions that opt out.
+ * When dispatcher-owned per-task git isolation is active, codex operates inside
+ * that worktree. Git-backed project tasks without a provisioned worktree still
+ * use the explicit project workspace. Non-git hive/business tasks get a clean
+ * dispatcher-owned task workspace outside the business artifact tree so stale
+ * AGENTS.md files and historical reports cannot become live instructions.
  */
 function resolveCodexEffectiveWorkspace(ctx: SessionContext): string | null {
   if (
@@ -423,7 +428,23 @@ function resolveCodexEffectiveWorkspace(ctx: SessionContext): string | null {
   ) {
     return ctx.workspaceIsolation.worktreePath;
   }
-  return ctx.projectWorkspace;
+  if (ctx.gitBackedProject === true) {
+    return ctx.projectWorkspace;
+  }
+  return resolveCleanNonGitTaskWorkspace(ctx);
+}
+
+function resolveCleanNonGitTaskWorkspace(ctx: SessionContext): string {
+  const configuredRoot = process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT?.trim();
+  const root = configuredRoot && configuredRoot.length > 0
+    ? configuredRoot
+    : path.join(os.homedir(), ".hivewright", "task-workspaces");
+  const safeTaskId = ctx.task.id.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return path.join(root, safeTaskId);
+}
+
+function ensureCodexWorkspace(workspace: string): void {
+  fs.mkdirSync(workspace, { recursive: true });
 }
 
 /**
@@ -445,6 +466,22 @@ export function collectCodexAgentTexts(rawStdout: string): string {
     } catch { /* ignore */ }
   }
   return out.join("\n\n").trim();
+}
+
+export function collectCodexFinalAgentText(rawStdout: string): string {
+  const messages: string[] = [];
+  for (const line of rawStdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      const ev = JSON.parse(trimmed) as { type?: string; item?: { type?: string; text?: string } };
+      if (ev.type === "item.completed" && ev.item?.type === "agent_message" && typeof ev.item.text === "string") {
+        const text = ev.item.text.trim();
+        if (text.length > 0) messages.push(text);
+      }
+    } catch { /* ignore */ }
+  }
+  return messages.at(-1) ?? "";
 }
 
 export function isCodexRolloutRegistrationFailure(text: string): boolean {

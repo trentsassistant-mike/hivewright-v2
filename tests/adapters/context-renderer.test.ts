@@ -136,4 +136,15 @@ describe("renderSessionPrompt", () => {
     expect(prompt).toContain(rawMemoryTail);
     expect(prompt).not.toContain("## Retrieval And Evidence");
   });
+
+  it("renders git-backed project discipline only when the session is explicitly git-backed", () => {
+    const plainPrompt = renderSessionPrompt(makeCtx({ gitBackedProject: false }));
+    const repoPrompt = renderSessionPrompt(makeCtx({ gitBackedProject: true }));
+
+    expect(plainPrompt).not.toContain("## Git-Backed Project Discipline");
+    expect(plainPrompt).not.toContain("Include the commit SHA");
+    expect(repoPrompt).toContain("## Git-Backed Project Discipline");
+    expect(repoPrompt).toContain("project marked `git_repo=true`");
+    expect(repoPrompt).toContain("Include the commit SHA");
+  });
 });

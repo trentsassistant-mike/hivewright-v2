@@ -560,7 +560,7 @@ describe.sequential("scanHive - recurring_failure detector", () => {
           adapterOverride: index === 1 ? "codex" : null,
           modelSlug: index === 2 ? "anthropic/claude-opus-4-7" : "openai-codex/gpt-5.5",
           modelProviderMismatchDetected: index === 2,
-          cwd: "/home/example/hivewrightv2",
+          cwd: "/workspace/hivewrightv2",
           stderrTail: "failed to record rollout items",
           truncated: false,
         })})

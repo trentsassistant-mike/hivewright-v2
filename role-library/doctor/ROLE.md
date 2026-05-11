@@ -96,7 +96,7 @@ Looking at the failure history, the dev-agent got "Cannot find module 'newbook-s
 ```json
 {
   "action": "fix_environment",
-  "details": "newbook-sdk is not installed in the project workspace. Need an infrastructure agent to run npm install newbook-sdk in $HIVES_WORKSPACE_ROOT/<slug>/projects/<project>."
+  "details": "newbook-sdk is not installed in the project workspace. Need an infrastructure agent to run npm install newbook-sdk in $HOME/hives/<slug>/projects/<project>."
 }
 ```
 ````

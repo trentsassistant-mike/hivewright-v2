@@ -43,6 +43,78 @@ export async function markSprintWakeUpSent(sql: Sql, goalId: string, sprintNumbe
 }
 
 /**
+ * Atomically claim the right to wake a goal supervisor for a settled sprint.
+ *
+ * This closes the race where the immediate task-completion path and the
+ * periodic lifecycle poll both detect the same completed sprint before either
+ * has finished the blocking supervisor wake. Only the caller whose conditional
+ * UPDATE returns a row may launch the supervisor.
+ */
+export async function claimSprintWakeUp(
+  sql: Sql,
+  goalId: string,
+  sprintNumber: number,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE goals
+    SET last_woken_sprint = ${sprintNumber}, updated_at = NOW()
+    WHERE id = ${goalId}
+      AND COALESCE(last_woken_sprint, 0) < ${sprintNumber}
+    RETURNING id
+  `;
+  return rows.length === 1;
+}
+
+export async function acquireGoalSupervisorWakeLock(
+  sql: Sql,
+  goalId: string,
+): Promise<(() => Promise<void>) | null> {
+  const lockSql = await sql.reserve();
+  try {
+    const [row] = await lockSql<{ acquired: boolean }[]>`
+      SELECT pg_try_advisory_lock(
+        hashtext('hivewright:goal-supervisor-wake'),
+        hashtext(${goalId})
+      ) AS acquired
+    `;
+    if (row?.acquired !== true) {
+      lockSql.release();
+      return null;
+    }
+
+    return async () => {
+      try {
+        await lockSql`
+          SELECT pg_advisory_unlock(
+            hashtext('hivewright:goal-supervisor-wake'),
+            hashtext(${goalId})
+          )
+        `;
+      } finally {
+        lockSql.release();
+      }
+    };
+  } catch (err) {
+    lockSql.release();
+    throw err;
+  }
+}
+
+export async function withGoalSupervisorWakeLock<T>(
+  sql: Sql,
+  goalId: string,
+  fn: () => Promise<T>,
+): Promise<{ acquired: true; result: T } | { acquired: false }> {
+  const release = await acquireGoalSupervisorWakeLock(sql, goalId);
+  if (!release) return { acquired: false };
+  try {
+    return { acquired: true, result: await fn() };
+  } finally {
+    await release();
+  }
+}
+
+/**
  * Roll a goal's `last_woken_sprint` back to `sprintNumber - 1` so the next
  * lifecycle poll re-detects the completed sprint as needing a wake-up.
  *

@@ -7,13 +7,8 @@ import { extractCleanResult } from "./openclaw-result-parser";
 import { unhealthyProbeResult } from "./probe-classifier";
 import { renderSessionPrompt } from "./context-renderer";
 
-const OPENCLAW_BIN = [
-  process.env.OPENCLAW_BIN,
-  process.env.HOME ? path.join(process.env.HOME, ".npm-global/bin/openclaw") : undefined,
-  "/usr/local/bin/openclaw",
-  "openclaw",
-].filter((p): p is string => Boolean(p))
-  .find((p) => { try { fs.accessSync(p); return true; } catch { return false; } }) || "openclaw";
+const OPENCLAW_BIN = ["/home/hivewright/.npm-global/bin/openclaw", "/usr/local/bin/openclaw", "openclaw"]
+  .find(p => { try { fs.accessSync(p); return true; } catch { return false; } }) || "openclaw";
 
 // Strip LLM-provider env keys before forwarding env to openclaw subprocesses.
 // openclaw spawns claude/codex/etc CLIs that prefer env-var auth over their
@@ -30,12 +25,7 @@ function buildOpenclawEnv(): NodeJS.ProcessEnv {
   delete env.ANTHROPIC_BASE_URL;
   delete env.OPENAI_API_KEY;
   delete env.OPENAI_BASE_URL;
-  const npmGlobalBin = process.env.HOME
-    ? path.join(process.env.HOME, ".npm-global/bin")
-    : undefined;
-  env.PATH = [npmGlobalBin, "/usr/local/bin", "/usr/bin", "/bin", process.env.PATH]
-    .filter(Boolean)
-    .join(":");
+  env.PATH = `/home/hivewright/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ""}`;
   return env as NodeJS.ProcessEnv;
 }
 

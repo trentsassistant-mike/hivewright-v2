@@ -1,4 +1,11 @@
 import type { Sql } from "postgres";
+import {
+  advancePipelineRunFromTask,
+  failPipelineRunFromTask,
+  getPipelineTaskExecutionRules,
+  markPipelineTaskRunning,
+  validatePipelineOutputContract,
+} from "@/pipelines/service";
 import type { ClaimedTask } from "./types";
 
 export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask | null> {
@@ -51,6 +58,7 @@ export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask 
   if (rows.length === 0) return null;
 
   const row = rows[0] as Record<string, unknown>;
+  await markPipelineTaskRunning(sql, row["id"] as string);
 
   // postgres.js may return snake_case keys despite AS aliases — normalize to camelCase
   const task: ClaimedTask = {
@@ -78,7 +86,17 @@ export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask 
   return task;
 }
 
-export async function releaseTask(sql: Sql, taskId: string, retryAfterSeconds: number): Promise<void> {
+export async function releaseTask(sql: Sql, taskId: string, retryAfterSeconds: number, reason = "Pipeline step retry budget exceeded"): Promise<void> {
+  const rules = await getPipelineTaskExecutionRules(sql, taskId);
+  const [task] = await sql<{ retry_count: number }[]>`
+    SELECT retry_count FROM tasks WHERE id = ${taskId}
+  `;
+  const retryCount = Number(task?.retry_count ?? 0);
+  if (rules && retryCount >= rules.maxRetries) {
+    await failPipelineRunFromTask(sql, { taskId, reason });
+    return;
+  }
+
   await sql`
     UPDATE tasks
     SET
@@ -106,18 +124,42 @@ export async function completeTask(
   resultSummary: string,
   options: { runtimeWarnings?: string[] } = {},
 ): Promise<void> {
+  const rules = await getPipelineTaskExecutionRules(sql, taskId);
+  if (rules) {
+    const validation = validatePipelineOutputContract(resultSummary, rules.outputContract, {
+      sourceContext: rules.sourceContext,
+      driftCheck: rules.driftCheck,
+    });
+    if (!validation.valid) {
+      const issues = [
+        validation.missingFields.length > 0 ? `missing required field(s): ${validation.missingFields.join(", ")}` : null,
+        ...validation.invalidFields,
+        ...validation.driftIssues,
+      ].filter((issue): issue is string => Boolean(issue));
+      const reason = `Pipeline output contract failed: ${issues.join("; ")}.`;
+      await failPipelineRunFromTask(sql, { taskId, reason });
+      return;
+    }
+  }
+
   // Clear failure_reason on success so a stale message from a prior watchdog
   // hit / earlier retry doesn't keep showing up on the dashboard for a task
   // that ultimately succeeded. Runtime warnings are explicitly retained as a
   // visible QA guardrail for adapter-layer anomalies that did not prevent
   // output persistence.
   const warning = options.runtimeWarnings?.filter(Boolean).join("\n") || null;
-  await sql`
+  const updated = await sql<{ id: string }[]>`
     UPDATE tasks
     SET status = 'completed', result_summary = ${resultSummary},
         completed_at = NOW(), updated_at = NOW(), failure_reason = ${warning}
     WHERE id = ${taskId}
+      AND status <> 'completed'
+    RETURNING id
   `;
+
+  if (updated.length === 0) return;
+
+  await advancePipelineRunFromTask(sql, { taskId, resultSummary });
 }
 
 export async function blockTask(sql: Sql, taskId: string, reason?: string): Promise<void> {

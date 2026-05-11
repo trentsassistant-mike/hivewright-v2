@@ -152,11 +152,10 @@ describe("POST /api/tasks", () => {
     expect(parked.failure_reason).toContain("replacement tasks");
   });
 
-  it("auto-assigns the only project when projectId is omitted", async () => {
-    const [project] = await db`
+  it("leaves projectId null when projectId is omitted with one project", async () => {
+    await db`
       INSERT INTO projects (hive_id, slug, name, workspace_path)
       VALUES (${testHiveId}, 'only-project', 'Only Project', '/tmp/only-project')
-      RETURNING id
     `;
 
     const req = new Request("http://localhost:3000/api/tasks", {
@@ -167,6 +166,38 @@ describe("POST /api/tasks", () => {
         assignedTo: "dev-agent",
         title: TEST_PREFIX + "Project default",
         brief: "Task without an explicit project id",
+        createdBy: "test-runner",
+      }),
+    });
+
+    const res = await createTask(req);
+
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.data.projectId).toBeNull();
+  });
+
+  it("inherits the goal project when projectId is omitted", async () => {
+    const [project] = await db`
+      INSERT INTO projects (hive_id, slug, name, workspace_path)
+      VALUES (${testHiveId}, 'goal-project', 'Goal Project', '/tmp/goal-project')
+      RETURNING id
+    `;
+    const [goal] = await db`
+      INSERT INTO goals (hive_id, title, project_id)
+      VALUES (${testHiveId}, 'Project-bound goal', ${project.id})
+      RETURNING id
+    `;
+
+    const req = new Request("http://localhost:3000/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        hiveId: testHiveId,
+        assignedTo: "dev-agent",
+        title: TEST_PREFIX + "Goal project task",
+        brief: "Task inherits project from the goal",
+        goalId: goal.id,
         createdBy: "test-runner",
       }),
     });
@@ -198,7 +229,7 @@ describe("POST /api/tasks", () => {
     expect(body.data.projectId).toBeNull();
   });
 
-  it("returns 400 when projectId is omitted for a multi-project hive", async () => {
+  it("leaves projectId null when projectId is omitted for a multi-project hive", async () => {
     await db`
       INSERT INTO projects (hive_id, slug, name, workspace_path)
       VALUES
@@ -220,9 +251,45 @@ describe("POST /api/tasks", () => {
 
     const res = await createTask(req);
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.error).toMatch(/multiple projects; specify project_id/i);
+    expect(body.data.projectId).toBeNull();
+  });
+
+  it("rejects content execution tasks from goal supervisors when the content pipeline fits", async () => {
+    await db`
+      INSERT INTO pipeline_templates (scope, hive_id, slug, name, department, active)
+      VALUES ('global', null, 'content-publishing', 'Content Publishing', 'marketing', true)
+    `;
+    const [goal] = await db`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${testHiveId}, 'Facebook ad goal', 'active')
+      RETURNING id
+    `;
+
+    const req = new Request("http://localhost:3000/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        hiveId: testHiveId,
+        assignedTo: "content-writer",
+        title: TEST_PREFIX + "Draft Facebook ad",
+        brief: "Create Facebook ad copy and campaign creative directly.",
+        goalId: goal.id,
+        createdBy: "goal-supervisor",
+      }),
+    });
+
+    const res = await createTask(req);
+
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toContain("content-publishing");
+
+    const created = await db`
+      SELECT id FROM tasks WHERE title = ${TEST_PREFIX + "Draft Facebook ad"}
+    `;
+    expect(created).toHaveLength(0);
   });
 
   it("returns 400 for missing required fields", async () => {

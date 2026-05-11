@@ -28,7 +28,7 @@ async function seedHive(): Promise<string> {
 }
 
 function hiveAttachmentDir(slug: string) {
-  return `/home/example/hives/${slug}`;
+  return `$HOME/hives/${slug}`;
 }
 
 function req(

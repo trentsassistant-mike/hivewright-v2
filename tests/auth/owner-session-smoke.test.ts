@@ -13,7 +13,7 @@ function makeConfig(
 ): OwnerSessionSmokeConfig {
   return {
     baseUrl: "http://127.0.0.1:3002",
-    databaseUrl: "postgresql://hivewright:hivewright@localhost:5432/hivewright",
+    databaseUrl: "postgresql://hivewright@localhost:5432/hivewrightv2",
     ownerEmail: "owner-qa@hivewright.local",
     ownerPassword: "owner-session-pass",
     ownerDisplayName: "Local QA Owner",

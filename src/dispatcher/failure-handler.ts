@@ -104,7 +104,7 @@ export async function handleTaskFailure(
   // Spawn failures and timeouts: retry with backoff if under limit
   if (task.retry_count < config.maxRetries) {
     const backoffSeconds = [60, 300, 900][task.retry_count] ?? 900;
-    await releaseTask(sql, taskId, backoffSeconds);
+    await releaseTask(sql, taskId, backoffSeconds, reason);
     return "retried";
   }
 

@@ -100,28 +100,37 @@ export async function findStuckTasks(
 
   const rows = await sql`
     SELECT
-      id, title,
-      assigned_to as "assignedTo",
-      last_heartbeat as "lastHeartbeat",
-      started_at as "startedAt",
+      t.id,
+      t.title,
+      t.assigned_to as "assignedTo",
+      t.last_heartbeat as "lastHeartbeat",
+      t.started_at as "startedAt",
       CASE
-        WHEN ${maxRuntimeSeconds} > 0
-         AND started_at IS NOT NULL
-         AND started_at < NOW() - make_interval(secs => ${maxRuntimeSeconds})
+        WHEN runtime_limit.effective_runtime_seconds > 0
+         AND t.started_at IS NOT NULL
+         AND t.started_at < NOW() - make_interval(secs => runtime_limit.effective_runtime_seconds)
         THEN 'max_runtime_exceeded'
         ELSE 'no_heartbeat'
       END AS reason
-    FROM tasks
-    WHERE status = 'active'
+    FROM tasks t
+    LEFT JOIN pipeline_step_runs psr ON psr.task_id = t.id
+    LEFT JOIN pipeline_steps ps ON ps.id = psr.step_id
+    CROSS JOIN LATERAL (
+      SELECT CASE
+        WHEN ps.max_runtime_seconds IS NOT NULL THEN ps.max_runtime_seconds
+        ELSE ${maxRuntimeSeconds}
+      END AS effective_runtime_seconds
+    ) runtime_limit
+    WHERE t.status = 'active'
       AND (
-        (last_heartbeat IS NOT NULL AND last_heartbeat < NOW() - make_interval(secs => ${timeoutSeconds}))
+        (t.last_heartbeat IS NOT NULL AND t.last_heartbeat < NOW() - make_interval(secs => ${timeoutSeconds}))
         OR
-        (last_heartbeat IS NULL AND started_at < NOW() - make_interval(secs => ${timeoutSeconds}))
+        (t.last_heartbeat IS NULL AND t.started_at < NOW() - make_interval(secs => ${timeoutSeconds}))
         OR
         (
-          ${maxRuntimeSeconds} > 0
-          AND started_at IS NOT NULL
-          AND started_at < NOW() - make_interval(secs => ${maxRuntimeSeconds})
+          runtime_limit.effective_runtime_seconds > 0
+          AND t.started_at IS NOT NULL
+          AND t.started_at < NOW() - make_interval(secs => runtime_limit.effective_runtime_seconds)
         )
       )
   `;

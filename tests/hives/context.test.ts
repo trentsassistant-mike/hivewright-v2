@@ -185,4 +185,43 @@ describe("buildHiveContextBlock", () => {
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
+
+  it("includes standing instructions as owner-defined policies and procedures", async () => {
+    const id = await insertHive();
+    await sql`
+      INSERT INTO standing_instructions (hive_id, content, affected_departments, confidence, created_at)
+      VALUES
+        (${id}, 'Never publish public marketing copy without owner approval.', '[]'::jsonb, 0.97, '2026-01-02T00:00:00Z'),
+        (${id}, 'For bookkeeping close, reconcile bank feeds before drafting reports.', '["finance"]'::jsonb, 0.93, '2026-01-01T00:00:00Z')
+    `;
+
+    const block = await buildHiveContextBlock(sql, id);
+
+    expect(block).toContain("**Policies / Rules / Owner Procedures:**");
+    expect(block).toContain("Standing instructions are owner-defined guidance/procedures and are mandatory when applicable.");
+    expect(block).toContain("- [standing instruction] Never publish public marketing copy without owner approval.");
+    expect(block).toContain("- [standing instruction] For bookkeeping close, reconcile bank feeds before drafting reports.");
+  });
+
+  it("includes bounded policy-like hive memory without dumping all memory", async () => {
+    const id = await insertHive();
+    await sql`
+      INSERT INTO hive_memory (hive_id, category, content, confidence, sensitivity, created_at, updated_at)
+      VALUES
+        (${id}, 'operations', 'Rule: never create new bookkeeping account codes without owner approval.', 0.96, 'internal', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+        (${id}, 'general', 'Policy: customer exports must stay inside the private workspace.', 0.91, 'internal', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z'),
+        (${id}, 'market', 'HiveWright buyers prefer concise demos.', 0.99, 'internal', '2026-01-03T00:00:00Z', '2026-01-03T00:00:00Z'),
+        (${id}, 'operations', 'Procedure: archive receipts after monthly reconciliation.', 0.4, 'internal', '2026-01-04T00:00:00Z', '2026-01-04T00:00:00Z'),
+        (${id}, 'operations', 'Rule: restricted memory must not appear in supervisor context.', 0.99, 'restricted', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z')
+    `;
+
+    const block = await buildHiveContextBlock(sql, id);
+
+    expect(block).toContain("**Policies / Rules / Owner Procedures:**");
+    expect(block).toContain("- [hive memory: operations] Rule: never create new bookkeeping account codes without owner approval.");
+    expect(block).toContain("- [hive memory: general] Policy: customer exports must stay inside the private workspace.");
+    expect(block).not.toContain("HiveWright buyers prefer concise demos.");
+    expect(block).not.toContain("archive receipts");
+    expect(block).not.toContain("restricted memory");
+  });
 });

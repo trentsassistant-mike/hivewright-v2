@@ -135,6 +135,40 @@ describe("findStuckTasks", () => {
     expect(zombie?.reason).toBe("max_runtime_exceeded");
   });
 
+
+
+  it("uses pipeline step max runtime over the global dispatcher runtime", async () => {
+    const [template] = await sql<{ id: string }[]>`
+      INSERT INTO pipeline_templates (scope, hive_id, slug, name, department, final_output_contract, version, active)
+      VALUES ('hive', ${bizId}, 'watchdog-pipeline-runtime', 'Watchdog Pipeline Runtime', 'engineering', ${sql.json({ artifactKind: "handoff", requiredFields: ["summary"] })}, 1, true)
+      RETURNING id
+    `;
+    const [step] = await sql<{ id: string }[]>`
+      INSERT INTO pipeline_steps (template_id, step_order, slug, name, role_slug, duty, qa_required, max_runtime_seconds, max_retries, output_contract, acceptance_criteria, drift_check)
+      VALUES (${template.id}, 1, 'bounded', 'Bounded', 'watchdog-test-role', 'Do bounded work.', false, 60, 0, ${sql.json({ artifactKind: "result", requiredFields: ["summary"] })}, 'Must finish quickly.', ${sql.json({ mode: "source_similarity" })})
+      RETURNING id
+    `;
+    const [run] = await sql<{ id: string }[]>`
+      INSERT INTO pipeline_runs (hive_id, template_id, template_version, status, current_step_id)
+      VALUES (${bizId}, ${template.id}, 1, 'active', ${step.id})
+      RETURNING id
+    `;
+    const [task] = await sql<{ id: string }[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, started_at, last_heartbeat)
+      VALUES (${bizId}, 'watchdog-test-role', 'pipeline', 'watchdog-pipeline-runtime', 'Brief', 'active', NOW() - INTERVAL '2 minutes', NOW())
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO pipeline_step_runs (run_id, step_id, task_id, status)
+      VALUES (${run.id}, ${step.id}, ${task.id}, 'running')
+    `;
+
+    const stuck = await findStuckTasks(sql, 300_000, 7_200_000);
+    const hit = stuck.find((t) => t.title === "watchdog-pipeline-runtime");
+    expect(hit).toBeDefined();
+    expect(hit?.reason).toBe("max_runtime_exceeded");
+  });
+
   it("does not flag a long-running task when maxRuntime is disabled (0)", async () => {
     await sql`
       INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status,
@@ -309,7 +343,7 @@ describe("findStuckBlockedTasks", () => {
         rolloutSignaturePresent: true,
         exitCode: 1,
         modelSlug: "openai-codex/gpt-5.5",
-        cwd: "/home/example/hivewrightv2",
+        cwd: "/workspace/hivewrightv2",
         stderrTail: "failed to record rollout items",
         truncated: false,
       })})
@@ -339,7 +373,7 @@ describe("findStuckBlockedTasks", () => {
         rolloutSignaturePresent: true,
         exitCode: 1,
         modelSlug: "openai-codex/gpt-5.5",
-        cwd: "/home/example/hivewrightv2",
+        cwd: "/workspace/hivewrightv2",
         stderrTail: "failed to record rollout items",
         truncated: false,
       })})

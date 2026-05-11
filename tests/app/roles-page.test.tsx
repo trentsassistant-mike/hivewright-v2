@@ -309,6 +309,78 @@ describe("RolesPage", () => {
     });
   });
 
+  it("renders an explicit no-tools state in the observability panel", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/roles/dev-agent/observability")) {
+        return jsonResponse({
+          data: {
+            role: { slug: "dev-agent", name: "Dev Agent", department: "eng", type: "executor" },
+            scope: { hiveId: null },
+            history: {
+              agentLevel: { historyLevel: "agent", totalRuns: 0, statusCounts: {}, lastRunAt: null },
+              taskLevel: [],
+              emptyMessage: "No agent-level run history has been recorded for this role.",
+            },
+            scheduleState: {
+              kind: "no_schedule",
+              label: "No schedule",
+              message: "No schedule is configured for this agent in the selected scope.",
+              schedules: [],
+            },
+            tools: [],
+            toolsEmptyMessage: "No explicit MCP tools are configured for this role.",
+            connectedApps: [
+              { id: "install-1", connectorSlug: "github", displayName: "Owner GitHub", status: "active" },
+            ],
+            connectedAppsEmptyMessage: null,
+            memory: { roleMemory: [], hiveMemory: [], emptyMessage: "No linked memory metadata is available for this agent." },
+            files: { attachments: [], workProducts: [], emptyMessage: "No linked file or artifact metadata is available for this agent." },
+          },
+        });
+      }
+      if (url.includes("/api/roles") && (!init?.method || init.method === "GET")) {
+        return jsonResponse({
+          data: [
+            {
+              slug: "dev-agent",
+              name: "Dev Agent",
+              department: "eng",
+              type: "executor",
+              recommendedModel: "openai-codex/gpt-5.4",
+              fallbackModel: null,
+              adapterType: "codex",
+              fallbackAdapterType: null,
+              skills: [],
+              active: true,
+              toolsConfig: { mcps: [] },
+              concurrencyLimit: 1,
+              provisionStatus: { satisfied: true, fixable: false, reason: null },
+              activeCount: 0,
+              runningCount: 0,
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/ollama/models")) {
+        return jsonResponse({ data: [] });
+      }
+      if (url.includes("/api/mcp-catalog")) {
+        return jsonResponse({ data: [] });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+
+    render(<RolesPage />);
+
+    await waitFor(() => expect(screen.getByText("Dev Agent")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
+
+    expect(await screen.findByText("No explicit MCP tools are configured for this role.")).toBeTruthy();
+    expect(screen.getByText("Owner GitHub")).toBeTruthy();
+  });
+
   it("offers and saves Gemini 3.1 Flash Live Preview through the roles model picker", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();

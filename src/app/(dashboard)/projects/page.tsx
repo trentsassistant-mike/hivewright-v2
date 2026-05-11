@@ -21,6 +21,7 @@ export default function ProjectsPage() {
   // New project form
   const [newSlug, setNewSlug] = useState("");
   const [newName, setNewName] = useState("");
+  const [newGitRepo, setNewGitRepo] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -45,7 +46,7 @@ export default function ProjectsPage() {
       const res = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hiveId: selected.id, slug: newSlug.trim(), name: newName.trim() }),
+        body: JSON.stringify({ hiveId: selected.id, slug: newSlug.trim(), name: newName.trim(), gitRepo: newGitRepo }),
       });
 
       if (!res.ok) {
@@ -58,6 +59,7 @@ export default function ProjectsPage() {
       setProjects((prev) => [created, ...prev]);
       setNewSlug("");
       setNewName("");
+      setNewGitRepo(false);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -112,6 +114,20 @@ export default function ProjectsPage() {
             </button>
           </div>
         </div>
+        <label className="flex items-start gap-2 rounded-md border border-dashed p-3 text-sm text-zinc-600 dark:text-zinc-300">
+          <input
+            type="checkbox"
+            checked={newGitRepo}
+            onChange={(e) => setNewGitRepo(e.target.checked)}
+            className="mt-1"
+          />
+          <span>
+            <span className="font-medium text-zinc-800 dark:text-zinc-100">Git-backed code project</span>
+            <span className="block text-xs text-zinc-500">
+              Opt in only for existing repositories. Git-backed projects get isolated worktrees and commit/SHA requirements.
+            </span>
+          </span>
+        </label>
         {createError && (
           <p className="text-sm text-red-600 dark:text-red-400">{createError}</p>
         )}

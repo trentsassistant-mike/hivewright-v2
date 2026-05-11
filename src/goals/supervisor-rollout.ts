@@ -1,5 +1,4 @@
 import fs from "fs";
-import os from "os";
 import path from "path";
 import readline from "readline";
 
@@ -23,7 +22,7 @@ import readline from "readline";
  * across wake-ups is a follow-up.
  */
 
-const SESSIONS_DIR = path.join(process.env.HOME ?? os.homedir(), ".codex", "sessions");
+const SESSIONS_DIR = `${process.env.HOME ?? "/home/hivewright"}/.codex/sessions`;
 
 export type SupervisorEventType =
   | "session_meta"

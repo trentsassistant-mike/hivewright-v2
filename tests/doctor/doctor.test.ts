@@ -338,7 +338,7 @@ describe("createDoctorTask", () => {
         adapterOverride: "codex",
         modelSlug: "openai-codex/gpt-5.5",
         modelProviderMismatchDetected: false,
-        cwd: "/home/example/hivewrightv2",
+        cwd: "/workspace/hivewrightv2",
         stderrTail: "failed to record rollout items",
         truncated: false,
       })})

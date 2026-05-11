@@ -75,11 +75,10 @@ describe("Goals API", () => {
     expect(body.data.budgetCents).toBe(500000);
   });
 
-  it("POST /api/goals — auto-assigns the only project when projectId is omitted", async () => {
-    const [project] = await sql`
+  it("POST /api/goals — leaves projectId null when projectId is omitted", async () => {
+    await sql`
       INSERT INTO projects (hive_id, slug, name, workspace_path)
       VALUES (${hiveId}, 'goal-project', 'Goal Project', '/tmp/goal-project')
-      RETURNING id
     `;
     const req = new Request("http://localhost/api/goals", {
       method: "POST",
@@ -94,10 +93,10 @@ describe("Goals API", () => {
 
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.data.projectId).toBe(project.id);
+    expect(body.data.projectId).toBeNull();
   });
 
-  it("POST /api/goals — returns 400 when projectId is omitted for a multi-project hive", async () => {
+  it("POST /api/goals — leaves projectId null when projectId is omitted for a multi-project hive", async () => {
     await sql`
       INSERT INTO projects (hive_id, slug, name, workspace_path)
       VALUES
@@ -115,9 +114,9 @@ describe("Goals API", () => {
 
     const res = await postGoal(req);
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.error).toMatch(/multiple projects; specify project_id/i);
+    expect(body.data.projectId).toBeNull();
   });
 
   it("POST /api/goals — returns 400 for missing fields", async () => {

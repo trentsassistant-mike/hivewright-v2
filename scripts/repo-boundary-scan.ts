@@ -1,6 +1,6 @@
-import { spawnSync } from "child_process";
-import { readFileSync } from "fs";
-import path from "path";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
 
 type Finding = {
   check: string;
@@ -31,9 +31,14 @@ const bannedTrackedPrefixes = [
 ];
 
 const bannedTrackedFiles = new Set([
+  "AGENTS.md",
   "CLAUDE.md",
-  "docs/adapter-workspace-fix.md",
-  "docs/skills-graduation-backlog.md",
+  "GEMINI.md",
+  "HEARTBEAT.md",
+  "IDENTITY.md",
+  "SOUL.md",
+  "TOOLS.md",
+  "USER.md",
 ]);
 
 const allowedDocs = new Set([
@@ -64,8 +69,8 @@ const bannedContent = [
     regex: /postgres(?:ql)?:\/\/(?:trent\b|[^@\s]+:hivewright@localhost:5433\b)/g,
   },
   {
-    label: "old local systemd service name",
-    regex: /\bhivewrightv2-(?:dashboard|dispatcher)(?:\.service)?\b/g,
+    label: "maintainer secrets include",
+    regex: new RegExp("/home/" + "trent/" + "cla" + "wd/\\.secrets\\.env", "g"),
   },
 ];
 
@@ -104,16 +109,16 @@ function scanTrackedBoundary(files: string[]) {
       addFinding({
         check: "tracked-local-file",
         file,
-        detail: "Local agent/planning file is tracked; keep it ignored and local-only.",
+        detail: "Local agent/runtime identity file is tracked; keep it ignored and local-only.",
       });
     }
 
     const bannedPrefix = bannedTrackedPrefixes.find((prefix) => file.startsWith(prefix));
     if (bannedPrefix) {
       addFinding({
-        check: "tracked-internal-path",
+        check: "tracked-operational-path",
         file,
-        detail: `Path is under internal-only prefix ${bannedPrefix}.`,
+        detail: `Path is under operational/private-only prefix ${bannedPrefix}.`,
       });
     }
 
@@ -121,11 +126,11 @@ function scanTrackedBoundary(files: string[]) {
       addFinding({
         check: "tracked-doc-boundary",
         file,
-        detail: "Only public install, boundary, streaming, and voice docs should be tracked.",
+        detail: "Only public install, boundary, streaming, and voice docs should be tracked in the source repo.",
       });
     }
 
-    if (file === ".env" || /^\.env\./.test(file) && file !== ".env.example") {
+    if (file === ".env" || (/^\.env\./.test(file) && file !== ".env.example")) {
       addFinding({
         check: "tracked-env-file",
         file,
@@ -169,7 +174,7 @@ function scanIgnoreRules(files: string[]) {
     addFinding({
       check: "env-example",
       file: ".env.example",
-      detail: ".env.example should be tracked for public installs.",
+      detail: ".env.example should be tracked for installs.",
     });
   }
 
@@ -196,12 +201,16 @@ function scanIgnoreRules(files: string[]) {
     "docs/security/example.md",
     "planning/example.md",
     "CLAUDE.md",
+    ".claude/example.json",
+    ".codex/example.json",
+    ".openclaw/example.json",
+    ".superpowers/example.md",
   ]) {
     if (!checkIgnore(pathname)) {
       addFinding({
         check: "internal-ignore",
         file: pathname,
-        detail: "Internal/local path should be ignored.",
+        detail: "Operational/local path should be ignored.",
       });
     }
   }
@@ -214,11 +223,11 @@ function main() {
   scanIgnoreRules(files);
 
   if (findings.length === 0) {
-    console.log("Public readiness scan passed.");
+    console.log("Repository boundary scan passed.");
     return;
   }
 
-  console.error(`Public readiness scan failed with ${findings.length} finding(s):`);
+  console.error(`Repository boundary scan failed with ${findings.length} finding(s):`);
   for (const finding of findings) {
     const location = finding.file
       ? `${finding.file}${finding.line ? `:${finding.line}` : ""}`

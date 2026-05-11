@@ -30,13 +30,17 @@
 # worktrees (superpowers convention)
 /.worktrees/
 
-# session/QA working artifacts (never commit)
-/CLAUDE.md
+# session/QA/operational working artifacts (never commit)
+/.hermes/
 /.hivewright-ctx/
 /.playwright-mcp/
 /.superpowers/
 /artifacts/
-/artifacts/security/
+/docs/*.md
+!/docs/STREAMING.md
+!/docs/installation.md
+!/docs/public-repository-boundary.md
+!/docs/content-publishing-governance.md
 /docs/audit/
 /docs/architecture/
 /docs/conventions/
@@ -50,11 +54,11 @@
 /docs/superpowers/
 /docs/ui/
 /docs/work-products/
-/docs/adapter-workspace-fix.md
-/docs/skills-graduation-backlog.md
 /planning/
 /after-*.png
 /before-*.png
+/docs-fixed*.png
+/dashboard-*.png
 /tmp-*.mjs
 /test-results/
 /.security-reports/
@@ -63,6 +67,7 @@
 # OpenClaw spawns its identity files in cwd — keep them out of the repo root
 # (templates live in /ea-templates and role-library/ instead)
 /AGENTS.md
+/CLAUDE.md
 /GEMINI.md
 /SOUL.md
 /TOOLS.md

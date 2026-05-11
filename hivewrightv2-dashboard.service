@@ -1,14 +1,15 @@
 [Unit]
-Description=HiveWright Dashboard
+Description=HiveWright v2 Dashboard (Next.js)
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/hivewright
-EnvironmentFile=%h/hivewright/.env
+WorkingDirectory=%h/hivewrightv2
 ExecStart=/usr/bin/npm run dev
 Restart=always
 RestartSec=10
+Environment=HIVEWRIGHT_RUNTIME_ROOT=%h/.hivewright
+EnvironmentFile=%h/.hivewright/config/.env
 StandardOutput=journal
 StandardError=journal
 

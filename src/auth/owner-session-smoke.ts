@@ -16,7 +16,7 @@ import {
 } from "./local-origin";
 
 export const DEFAULT_OWNER_SESSION_DATABASE_URL =
-  "postgresql://hivewright:hivewright@localhost:5432/hivewright";
+  "postgresql://hivewright@localhost:5432/hivewrightv2";
 export const OWNER_SESSION_SMOKE_HIVE_SLUG = "owner-session-smoke";
 export const OWNER_SESSION_LOCAL_COMMAND = "npm run auth:owner-smoke:local";
 

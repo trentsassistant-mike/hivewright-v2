@@ -113,8 +113,7 @@ When creating an escalation task on failure:
 
 ## Hive Directory Conventions
 
-Hives live under the configured hive workspace root, for example
-`~/hivewright/hives/{hive-id}/`.
+Hives live at $HOME/hivewright/hives/{hive-id}/
 
 Each hive directory contains:
 - HIVE.md — Hive identity, context, strategy (YAML frontmatter + markdown, maintained by COO)

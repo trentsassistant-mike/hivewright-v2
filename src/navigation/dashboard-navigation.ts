@@ -29,6 +29,17 @@ function hiveSectionIsActive(section: "ideas" | "initiatives" | "files", href: s
     pathname === href || (pathname.startsWith("/hives/") && pathname.endsWith(`/${section}`));
 }
 
+function proceduresIsActive(pathname: string) {
+  return (
+    pathname === "/pipelines" ||
+    pathname.startsWith("/pipelines/") ||
+    pathname === "/setup/workflow-capture" ||
+    pathname.startsWith("/setup/workflow-capture/") ||
+    pathname === "/setup/sop-importer" ||
+    pathname.startsWith("/setup/sop-importer/")
+  );
+}
+
 export function dashboardNavigationLinkIsActive(link: DashboardNavigationLink, pathname: string) {
   return link.isActive
     ? link.isActive(pathname)
@@ -68,6 +79,7 @@ export function buildDashboardNavigation({
       href: "/tasks",
       links: [
         { id: "tasks", href: "/tasks", label: "Tasks" },
+        { id: "procedures", href: "/pipelines", label: "Procedures", isActive: proceduresIsActive },
         { id: "goals", href: "/goals", label: "Goals" },
         {
           id: "initiatives",
@@ -136,8 +148,6 @@ export function buildDashboardNavigation({
           label: "Files",
           isActive: hiveSectionIsActive("files", filesHref),
         },
-        { id: "screen-capture", href: "/setup/workflow-capture", label: "Screen capture" },
-        { id: "workflow-capture", href: "/setup/sop-importer", label: "Workflow capture" },
         { id: "docs", href: "/docs", label: "Docs" },
       ],
     },

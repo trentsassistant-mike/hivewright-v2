@@ -59,8 +59,6 @@ export function createDefaultDashboardHealerDeps(): DashboardHealerDeps {
   }
 
   const systemctlBin = process.env.SYSTEMCTL_BIN ?? "systemctl";
-  const dashboardService =
-    process.env.HIVEWRIGHT_DASHBOARD_SERVICE ?? "hivewright-dashboard.service";
 
   return {
     fetch: globalThis.fetch.bind(globalThis),
@@ -70,7 +68,7 @@ export function createDefaultDashboardHealerDeps(): DashboardHealerDeps {
       await execFileAsync(systemctlBin, [
         "--user",
         action,
-        dashboardService,
+        "hivewrightv2-dashboard.service",
       ]);
     },
     removeNextDir: async () => {

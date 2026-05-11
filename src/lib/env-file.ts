@@ -1,8 +1,9 @@
 import fs from "fs";
 import path from "path";
+import { resolveHivewrightEnvFilePath } from "@/runtime/paths";
 
 export function defaultEnvFilePath(): string {
-  return path.join(process.cwd(), ".env");
+  return resolveHivewrightEnvFilePath();
 }
 
 function quoteEnvValue(value: string): string {
@@ -36,6 +37,7 @@ export function upsertEnvFileValue(
     nextLines.push(line);
   }
 
+  fs.mkdirSync(path.dirname(envFilePath), { recursive: true });
   fs.writeFileSync(envFilePath, `${nextLines.join("\n").replace(/\n+$/, "")}\n`, "utf-8");
   return { envFilePath, updated };
 }

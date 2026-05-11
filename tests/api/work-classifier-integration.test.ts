@@ -184,15 +184,41 @@ describe("POST /api/work with classifier", () => {
     expect(n).toBe(0);
   });
 
-  it("auto-assigns the only project when projectId is omitted", async () => {
-    const [project] = await sql`
+  it("leaves projectId null when projectId is omitted with one project", async () => {
+    await sql`
       INSERT INTO projects (hive_id, slug, name, workspace_path)
       VALUES (${bizId}, 'hivewrightv2', 'HiveWright v2', ${process.cwd()})
+    `;
+
+    const res = await POST(req({
+      hiveId: bizId,
+      input: "Fix the onboarding copy",
+      assignedTo: "dev-agent",
+    }));
+
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    const [task] = await sql`
+      SELECT project_id FROM tasks WHERE id = ${body.data.id}
+    `;
+    expect(task.project_id).toBeNull();
+  });
+
+  it("inherits the goal project for task intake when projectId is omitted", async () => {
+    const [project] = await sql`
+      INSERT INTO projects (hive_id, slug, name, workspace_path)
+      VALUES (${bizId}, 'goal-project', 'Goal Project', '/tmp/work-goal-project')
+      RETURNING id
+    `;
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, project_id)
+      VALUES (${bizId}, 'Goal with project', ${project.id})
       RETURNING id
     `;
 
     const res = await POST(req({
       hiveId: bizId,
+      goalId: goal.id,
       input: "Fix the onboarding copy",
       assignedTo: "dev-agent",
     }));
@@ -220,7 +246,7 @@ describe("POST /api/work with classifier", () => {
     expect(task.project_id).toBeNull();
   });
 
-  it("returns 400 when projectId is omitted for a multi-project hive", async () => {
+  it("leaves projectId null when projectId is omitted for a multi-project hive", async () => {
     await sql`
       INSERT INTO projects (hive_id, slug, name, workspace_path)
       VALUES
@@ -234,9 +260,11 @@ describe("POST /api/work with classifier", () => {
       assignedTo: "dev-agent",
     }));
 
-    expect(res.status).toBe(400);
-    await expect(res.json()).resolves.toMatchObject({
-      error: "Hive has multiple projects; specify project_id.",
-    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    const [task] = await sql`
+      SELECT project_id FROM tasks WHERE id = ${body.data.id}
+    `;
+    expect(task.project_id).toBeNull();
   });
 });

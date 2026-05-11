@@ -73,7 +73,7 @@ class FakeWs {
   }
 }
 
-function fakeRequest(token?: string, host = "voice.example.test"): IncomingMessage {
+function fakeRequest(token?: string, host = "voice.example.ts.net"): IncomingMessage {
   const path = token ? `/api/voice/direct/ws?token=${encodeURIComponent(token)}` : "/api/voice/direct/ws";
   return {
     url: path,

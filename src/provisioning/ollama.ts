@@ -1,7 +1,7 @@
 import type { Provisioner, ProvisionProgress, ProvisionStatus, ProvisionerInput } from "./types";
 
 function endpoint(): string {
-  return process.env.OLLAMA_ENDPOINT ?? "http://localhost:11434";
+  return process.env.OLLAMA_ENDPOINT ?? "http://192.168.50.68:11434";
 }
 
 /** Strip an `ollama/` prefix from recommendedModel (convention in role.yaml). */

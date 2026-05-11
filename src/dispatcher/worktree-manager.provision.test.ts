@@ -67,8 +67,8 @@ describe("provisionWorktree", () => {
     const taskB = "task-bbbbbbbb-2222";
 
     const persist = vi.fn().mockResolvedValue(undefined);
-    const a = await provisionWorktree(taskA, base, { persist });
-    const b = await provisionWorktree(taskB, base, { persist });
+    const a = await provisionWorktree(taskA, base, { gitBackedProject: true, persist });
+    const b = await provisionWorktree(taskB, base, { gitBackedProject: true, persist });
 
     expect(a.status).toBe("active");
     expect(b.status).toBe("active");
@@ -85,7 +85,7 @@ describe("provisionWorktree", () => {
   it("returns status `disabled` with an explicit reason when baseWorkspace is null", async () => {
     const log = vi.fn();
     const persist = vi.fn().mockResolvedValue(undefined);
-    const result = await provisionWorktree("task-null", null, { log, persist });
+    const result = await provisionWorktree("task-null", null, { gitBackedProject: true, log, persist });
 
     expect(result.status).toBe("disabled");
     expect(result.baseWorkspace).toBeNull();
@@ -107,7 +107,7 @@ describe("provisionWorktree", () => {
 
   it("returns status `disabled` with an explicit reason when baseWorkspace is an empty string", async () => {
     const log = vi.fn();
-    const result = await provisionWorktree("task-empty", "", { log });
+    const result = await provisionWorktree("task-empty", "", { gitBackedProject: true, log });
 
     expect(result.status).toBe("disabled");
     expect(result.baseWorkspace).toBeNull();
@@ -119,7 +119,7 @@ describe("provisionWorktree", () => {
   it("returns status `skipped` with an explicit reason when baseWorkspace is not a git repository", async () => {
     const plain = await makeTempPlainDir();
     const log = vi.fn();
-    const result = await provisionWorktree("task-not-git", plain, { log });
+    const result = await provisionWorktree("task-not-git", plain, { gitBackedProject: true, log });
 
     expect(result.status).toBe("skipped");
     expect(result.baseWorkspace).toBe(plain);
@@ -128,6 +128,21 @@ describe("provisionWorktree", () => {
     expect(typeof result.reason).toBe("string");
     expect((result.reason ?? "").length).toBeGreaterThan(0);
     expect(log.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it("returns status `disabled` without touching git when the caller does not assert an explicit git-backed project", async () => {
+    const base = await makeTempGitRepo();
+    const log = vi.fn();
+    const result = await provisionWorktree("task-policy-gate", base, { log });
+
+    expect(result.status).toBe("disabled");
+    expect(result.baseWorkspace).toBe(base);
+    expect(result.worktreePath).toBeNull();
+    expect(result.branchName).toBeNull();
+    expect(typeof result.reason).toBe("string");
+    expect(result.reason).toContain("git-backed project");
+    expect(log.mock.calls.length).toBeGreaterThan(0);
+    await expect(fs.access(path.join(base, ".claude", "worktrees", "task-policy-gate"))).rejects.toThrow();
   });
 
   it("persists worktree metadata before returning on the git-backed success path", async () => {
@@ -145,7 +160,7 @@ describe("provisionWorktree", () => {
       order.push(`persist:${(metadata as { status: string }).status}`);
     });
 
-    const helperPromise = provisionWorktree("task-success-1", base, { persist }).then(
+    const helperPromise = provisionWorktree("task-success-1", base, { gitBackedProject: true, persist }).then(
       (r) => {
         order.push("helper-resolved");
         return r;

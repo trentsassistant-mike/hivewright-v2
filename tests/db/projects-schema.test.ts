@@ -38,7 +38,7 @@ describe("projects table", () => {
     expect(project.slug).toBe(TEST_PREFIX + "website");
     expect(project.name).toBe("Website Rebuild");
     expect(project.workspace_path).toBe("/tmp/test-workspace");
-    expect(project.git_repo).toBe(true);
+    expect(project.git_repo).toBe(false);
   });
 
   it("enforces unique slug per hive", async () => {

@@ -91,12 +91,7 @@ Plan marker: ${CURRENT_TECH_RESEARCH_PLAN_VERSION}
 
 ## Traceability
 
-Before automating a rubric dimension or guardrail, identify the affected
-runtime seams directly in the current codebase. Record which database tables,
-API routes, dispatcher paths, credentials, providers, UI surfaces, and owner
-decision points the change can touch. If the affected seam is unclear, stop at
-research or create an owner/security review instead of creating implementation
-work.
+Before automating a rubric dimension or guardrail, use \`docs/research/current-tech-research-traceability-matrix.md\`.
 
 ## Evaluated Release Registry
 
@@ -219,10 +214,10 @@ Before reporting this task complete, run:
 
 ## Source And Rubric Inputs
 
-Use primary sources where available: official release notes, vendor
-documentation, changelogs, pricing/terms pages, status pages, security
-advisories, and repository releases. Treat community posts or secondary
-coverage as leads until corroborated by a primary source.
+- Source strategy: \`docs/research/2026-04-28-daily-tech-release-source-strategy.md\`.
+- Usefulness rubric: \`docs/research/tech-release-usefulness-rubric.md\`.
+- Architecture map: \`docs/architecture/current-tech-research-workflow-map.md\`.
+- Traceability matrix: \`docs/research/current-tech-research-traceability-matrix.md\`.
 `;
 }
 

@@ -41,7 +41,7 @@ paths = ['''docs/superpowers/plans/2026-04-06-phase6-polish\.md$''']
 regexTarget = "line"
 regexes = [
   '''test-placeholder-key-replace-32ch''',
-  '''postgresql://example:[^@]+@localhost:5432/hivewright''',
+  '''postgresql://hivewright:placeholder@localhost:5432/hivewrightv2''',
 ]
 
 # Test fixtures intentionally exercise secret-handling behavior with synthetic

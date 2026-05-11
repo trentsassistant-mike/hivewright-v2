@@ -1,4 +1,3 @@
-import "dotenv/config";
 import postgres from "postgres";
 import {
   assertLocalOwnerSessionResetAllowed,
@@ -6,9 +5,9 @@ import {
   DEFAULT_LOCAL_OWNER_EMAIL,
   seedLocalOwnerSession,
 } from "../src/auth/local-owner-session";
-import { requireEnv } from "../src/lib/required-env";
 
-const DATABASE_URL = requireEnv("DATABASE_URL");
+const DATABASE_URL =
+  process.env.DATABASE_URL ?? "postgresql://hivewright@localhost:5432/hivewrightv2";
 
 async function main() {
   assertLocalOwnerSessionResetAllowed(DATABASE_URL);

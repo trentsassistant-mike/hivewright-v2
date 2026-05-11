@@ -59,10 +59,10 @@ const PRICING: Record<string, ModelPricing> = {
  */
 const FALLBACK_PRICING: ModelPricing = { inputPer1k: 0.25, outputPer1k: 1.0 };
 
-// Ollama endpoint for local/self-hosted deployments. Lazily read so importing
-// this module from client components doesn't trip Next's process.env inline.
+// Ollama endpoint on GPU machine (same LAN). Lazily read so importing this
+// module from client components doesn't trip Next's process.env inline.
 function ollamaEndpoint(): string {
-  return process.env.OLLAMA_ENDPOINT || "http://localhost:11434";
+  return process.env.OLLAMA_ENDPOINT || "http://192.168.50.68:11434";
 }
 
 export function getProviderEndpoint(provider: string): string | null {

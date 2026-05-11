@@ -14,7 +14,14 @@ import { checkAndFireSchedules } from "./schedule-timer";
 import { runScheduledModelDiscovery } from "./model-discovery-schedule";
 import { runSystemModelHealthRenewal } from "./model-health-renewal";
 
-import { findNewGoals, findCompletedSprintsForWakeUp, markSprintWakeUpSent, revertSprintWakeUp, findOrphanedWakeUps } from "./goal-lifecycle";
+import {
+  findNewGoals,
+  findCompletedSprintsForWakeUp,
+  claimSprintWakeUp,
+  revertSprintWakeUp,
+  findOrphanedWakeUps,
+  withGoalSupervisorWakeLock,
+} from "./goal-lifecycle";
 import {
   createSupervisorWakeReconciliationState,
   runSupervisorWakeReconciliation,
@@ -64,6 +71,7 @@ import { checkPgvectorAvailable, initializeEmbeddings, storeEmbedding } from "..
 import { shouldRunSynthesis, runSynthesis } from "../memory/synthesis";
 import { getDefaultConfig as getModelConfig } from "../memory/model-caller";
 import type { ExtractionContext } from "../memory/types";
+import { buildSessionContextProvenance, writeTaskContextProvenanceLog } from "../provenance/task-context";
 import { runInsightCurator } from "../insights/curator";
 import { emitTaskEvent } from "./event-emitter";
 import { sendNotification } from "../notifications/sender";
@@ -80,9 +88,8 @@ import {
   type DashboardHealerState,
 } from "./dashboard-healer";
 import { OutboundNotifier } from "./notifier";
-import { requireEnv } from "@/lib/required-env";
 
-const DATABASE_URL = requireEnv("DATABASE_URL");
+const DATABASE_URL = process.env.DATABASE_URL || "postgresql://hivewright@localhost:5432/hivewrightv2";
 const CODEX_RUNTIME_CONTEXT_BYTE_CAP = 16_384;
 const MODEL_DISCOVERY_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -437,6 +444,7 @@ export class Dispatcher {
       }
     }, this.config.sprintCheckIntervalMs);
     console.log(`[dispatcher] Sprint check every ${this.config.sprintCheckIntervalMs / 1000}s.`);
+    void this.runGoalLifecycleCheck();
 
     // 7a. Periodic recovery for dropped sprint-completion wake edges. The
     // normal lifecycle check is edge-driven by last_woken_sprint < sprint; this
@@ -773,6 +781,11 @@ export class Dispatcher {
           goalId,
           chunk: `Starting task: ${task.title}`,
           type: "status",
+        });
+        await writeTaskContextProvenanceLog(this.sql, {
+          taskId: task.id,
+          goalId,
+          provenance: buildSessionContextProvenance(ctx),
         });
       } catch { /* ignore — streaming is best-effort */ }
 
@@ -1198,9 +1211,13 @@ export class Dispatcher {
           console.log(`[dispatcher] QA task ${task.id} verdict: FAIL`);
           await processQaResult(this.sql, task.parentTaskId, { passed: false, feedback });
         } else {
-          const reason = `parser_unknown: QA output did not contain an explicit pass/fail verdict. ${feedback}`;
-          console.log(`[dispatcher] QA task ${task.id} produced no trusted verdict — blocking parent instead of triggering quality rework.`);
-          await processQaResult(this.sql, task.parentTaskId, { passed: false, feedback: reason, failureClass: "parser_unknown" });
+          // No explicit verdict on its own line — do not convert parser/runtime noise into quality rework.
+          const lower = result.output.toLowerCase();
+          const blockedPattern = /\bcould not\b|\bunable to\b|\bno (work product|deliverable|file|access)\b|\bpermission denied\b|\btool unavailable\b|\bruntime\b|\bspawn\b|\badapter\b|\bmodel\b|\bhealth gate\b/;
+          const failureClass = blockedPattern.test(lower) ? "runtime_blocked" : "parser_unknown";
+          const reason = `${failureClass}: QA review did not produce a reliable pass/fail verdict; not treating this as a quality failure. Feedback excerpt: ${feedback}`;
+          console.log(`[dispatcher] QA task ${task.id} ${failureClass} — blocking parent ${task.parentTaskId} instead of triggering QA rework.`);
+          await processQaResult(this.sql, task.parentTaskId, { passed: false, feedback: reason, failureClass });
         }
         await completeTask(this.sql, task.id, result.output, completionOptions);
         console.log(`[dispatcher] QA task ${task.id} completed.`);
@@ -1260,19 +1277,31 @@ export class Dispatcher {
           );
           if (thisSprint) {
             console.log(`[dispatcher] Sprint ${task.sprintNumber} complete for goal ${task.goalId} — waking supervisor immediately.`);
-            // Mark before waking to prevent the timer-based lifecycle check from
-            // issuing a second wake-up while this blocking call is in progress.
-            // If the wake-up fails or the dispatcher dies mid-call, revertSprintWakeUp
-            // rolls last_woken_sprint back so the next poll re-detects this sprint.
-            await markSprintWakeUpSent(this.sql, task.goalId, task.sprintNumber);
+            // Atomically claim the sprint wake before launching the blocking
+            // supervisor run. This prevents immediate, timer, comment, and
+            // reconciliation paths from planning the same next sprint in parallel.
+            const claimed = await claimSprintWakeUp(this.sql, task.goalId, task.sprintNumber);
+            if (!claimed) {
+              console.log(
+                `[dispatcher] Sprint ${task.sprintNumber} wake for goal ${task.goalId} already claimed — skipping duplicate immediate wake.`,
+              );
+              return;
+            }
             let wakeOk = false;
             try {
-              const { wakeUpSupervisor } = await import("../goals/supervisor");
-              const wakeResult = await wakeUpSupervisor(this.sql, task.goalId, task.sprintNumber);
-              if (wakeResult.success) {
+              const lockedWake = await withGoalSupervisorWakeLock(this.sql, task.goalId, async () => {
+                const { wakeUpSupervisor } = await import("../goals/supervisor");
+                return await wakeUpSupervisor(this.sql, task.goalId!, task.sprintNumber!);
+              });
+              if (!lockedWake.acquired) {
+                console.log(
+                  `[dispatcher] Supervisor wake already in flight for goal ${task.goalId} — coalescing immediate sprint ${task.sprintNumber} wake.`,
+                );
+                wakeOk = true;
+              } else if (lockedWake.result.success) {
                 wakeOk = true;
               } else {
-                console.error(`[dispatcher] Immediate supervisor wake-up failed: ${wakeResult.error}`);
+                console.error(`[dispatcher] Immediate supervisor wake-up failed: ${lockedWake.result.error}`);
               }
             } finally {
               if (!wakeOk) {
@@ -1464,8 +1493,17 @@ export class Dispatcher {
         );
         return;
       }
-      const { wakeUpSupervisorOnComment } = await import("../goals/supervisor");
-      const result = await wakeUpSupervisorOnComment(this.sql, goal.id, comment.id);
+      const lockedWake = await withGoalSupervisorWakeLock(this.sql, goal.id, async () => {
+        const { wakeUpSupervisorOnComment } = await import("../goals/supervisor");
+        return await wakeUpSupervisorOnComment(this.sql, goal.id, comment.id);
+      });
+      if (!lockedWake.acquired) {
+        console.log(
+          `[dispatcher] Supervisor wake already in flight for goal ${goal.id}; coalescing comment ${comment.id}.`,
+        );
+        return;
+      }
+      const result = lockedWake.result;
       if (result.error) {
         console.error(
           `[dispatcher] comment wake-up failed for goal ${goal.id} comment ${comment.id}: ${result.error}`,
@@ -1530,8 +1568,17 @@ export class Dispatcher {
         }).catch((err) => console.error(`[dispatcher] New-goal notification failed for ${goal.id}:`, err));
 
         try {
-          const { startGoalSupervisor } = await import("../goals/supervisor");
-          const result = await startGoalSupervisor(this.sql, goal.id);
+          const lockedStart = await withGoalSupervisorWakeLock(this.sql, goal.id, async () => {
+            const { startGoalSupervisor } = await import("../goals/supervisor");
+            return await startGoalSupervisor(this.sql, goal.id);
+          });
+          if (!lockedStart.acquired) {
+            console.log(
+              `[dispatcher] Supervisor start already in flight for goal ${goal.id}; skipping duplicate new-goal start.`,
+            );
+            continue;
+          }
+          const result = lockedStart.result;
           if (result.error) {
             console.error(`[dispatcher] Failed to start supervisor for goal ${goal.id}: ${result.error}`);
           } else {
@@ -1551,16 +1598,29 @@ export class Dispatcher {
         // wake-up for the same sprint before the first one finishes. If the wake
         // call fails (or the dispatcher dies mid-call), revertSprintWakeUp rolls
         // last_woken_sprint back so the next poll re-detects this sprint.
-        await markSprintWakeUpSent(this.sql, sprint.goalId, sprint.sprintNumber);
+        const claimed = await claimSprintWakeUp(this.sql, sprint.goalId, sprint.sprintNumber);
+        if (!claimed) {
+          console.log(
+            `[dispatcher] Sprint ${sprint.sprintNumber} wake for goal ${sprint.goalId} already claimed — skipping duplicate lifecycle wake.`,
+          );
+          continue;
+        }
         let wakeOk = false;
         try {
-          const { wakeUpSupervisor } = await import("../goals/supervisor");
-          const result = await wakeUpSupervisor(this.sql, sprint.goalId, sprint.sprintNumber);
-          if (result.success) {
+          const lockedWake = await withGoalSupervisorWakeLock(this.sql, sprint.goalId, async () => {
+            const { wakeUpSupervisor } = await import("../goals/supervisor");
+            return await wakeUpSupervisor(this.sql, sprint.goalId, sprint.sprintNumber);
+          });
+          if (!lockedWake.acquired) {
+            console.log(
+              `[dispatcher] Supervisor wake already in flight for goal ${sprint.goalId}; coalescing lifecycle sprint ${sprint.sprintNumber} wake.`,
+            );
             wakeOk = true;
-            console.log(`[dispatcher] Supervisor wake-up sent for goal ${sprint.goalId}: ${result.output.slice(0, 200)}`);
+          } else if (lockedWake.result.success) {
+            wakeOk = true;
+            console.log(`[dispatcher] Supervisor wake-up sent for goal ${sprint.goalId}: ${lockedWake.result.output.slice(0, 200)}`);
           } else {
-            console.error(`[dispatcher] Supervisor wake-up failed for goal ${sprint.goalId}: ${result.error}`);
+            console.error(`[dispatcher] Supervisor wake-up failed for goal ${sprint.goalId}: ${lockedWake.result.error}`);
           }
         } catch (err) {
           console.error(`[dispatcher] Sprint wake-up error for goal ${sprint.goalId}:`, err);

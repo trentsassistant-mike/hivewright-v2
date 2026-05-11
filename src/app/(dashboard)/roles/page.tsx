@@ -4,6 +4,7 @@ import { ProvisionBadge } from "../../../components/provision-badge";
 import type { ProvisionStatus } from "../../../provisioning/types";
 import { RunsTable, type RunsTableRow } from "@/components/runs-table";
 import { useHiveContext } from "@/components/hive-context";
+import type { AgentObservability } from "@/agents/observability";
 
 interface Role {
   slug: string; name: string; department: string; type: string;
@@ -62,6 +63,7 @@ const ALL_CLOUD_MODELS = [
 ];
 
 const OLLAMA_MODELS_ENDPOINT = "/api/ollama/models";
+const AGENT_OBSERVABILITY_ENABLED = process.env.NEXT_PUBLIC_AGENT_OBSERVABILITY_PANEL !== "false";
 
 function appendUniqueModel(models: ModelOption[], model: ModelOption): ModelOption[] {
   if (models.some((existing) => existing.id === model.id)) return models;
@@ -82,6 +84,10 @@ export default function RolesPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [mcpCatalog, setMcpCatalog] = useState<McpCatalogEntry[]>([]);
   const [toolsEditor, setToolsEditor] = useState<string | null>(null); // slug of role being edited
+  const [observabilitySlug, setObservabilitySlug] = useState<string | null>(null);
+  const [observability, setObservability] = useState<AgentObservability | null>(null);
+  const [observabilityLoading, setObservabilityLoading] = useState(false);
+  const [observabilityError, setObservabilityError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/roles")
@@ -139,6 +145,38 @@ export default function RolesPage() {
       cancelled = true;
     };
   }, [selectedHive?.id]);
+
+  useEffect(() => {
+    if (!AGENT_OBSERVABILITY_ENABLED || !observabilitySlug) {
+      setObservability(null);
+      setObservabilityError(null);
+      setObservabilityLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const params = selectedHive?.id ? `?hiveId=${encodeURIComponent(selectedHive.id)}` : "";
+    setObservabilityLoading(true);
+    setObservabilityError(null);
+    fetch(`/api/roles/${encodeURIComponent(observabilitySlug)}/observability${params}`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+        setObservability(body.data ?? null);
+      })
+      .catch((err) => {
+        if ((err as Error).name === "AbortError") return;
+        setObservability(null);
+        setObservabilityError((err as Error).message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setObservabilityLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [observabilitySlug, selectedHive?.id]);
 
   const saveToolsConfig = async (slug: string, mcps: string[] | null) => {
     setSaving(slug);
@@ -428,6 +466,14 @@ export default function RolesPage() {
             >
               {togglingActive === role.slug ? "…" : "Disable"}
             </button>
+            {AGENT_OBSERVABILITY_ENABLED && (
+              <button
+                onClick={() => setObservabilitySlug((current) => current === role.slug ? null : role.slug)}
+                className="rounded border border-zinc-300/60 px-2 py-1 text-xs text-zinc-500 hover:border-blue-400/60 hover:text-blue-600 dark:border-zinc-700/60 dark:text-zinc-400"
+              >
+                {observabilitySlug === role.slug ? "Hide observability" : "Inspect"}
+              </button>
+            )}
             {errors[role.slug] && <div className="text-xs text-red-600">{errors[role.slug]}</div>}
           </div>
         ),
@@ -578,6 +624,16 @@ export default function RolesPage() {
         }}
       />
 
+      {AGENT_OBSERVABILITY_ENABLED && observabilitySlug && (
+        <AgentObservabilityPanel
+          data={observability}
+          loading={observabilityLoading}
+          error={observabilityError}
+          hiveName={selectedHive?.name ?? null}
+          onClose={() => setObservabilitySlug(null)}
+        />
+      )}
+
       {showDisabled && (
         <div className="space-y-2">
           <h2 className="text-sm font-medium text-zinc-500">Disabled roles</h2>
@@ -688,6 +744,195 @@ export default function RolesPage() {
         );
       })()}
     </div>
+  );
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "not recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "not recorded";
+  return date.toLocaleString();
+}
+
+function AgentObservabilityPanel({
+  data,
+  loading,
+  error,
+  hiveName,
+  onClose,
+}: {
+  data: AgentObservability | null;
+  loading: boolean;
+  error: string | null;
+  hiveName: string | null;
+  onClose: () => void;
+}) {
+  return (
+    <section className="space-y-4 rounded-lg border border-zinc-200 bg-white/70 p-4 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.025]">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Agent observability</h2>
+          <p className="text-xs text-zinc-500">
+            {hiveName ? `Scope: ${hiveName}` : "Scope: all visible hives"}
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="rounded border border-zinc-300/60 px-2 py-1 text-xs text-zinc-500 hover:border-zinc-400 dark:border-zinc-700/60"
+        >
+          Close
+        </button>
+      </div>
+
+      {loading && <p className="rounded-md border border-dashed p-4 text-sm text-zinc-500">Loading agent observability.</p>}
+      {error && <p className="rounded-md border border-red-300/40 bg-red-50 p-4 text-sm text-red-700 dark:bg-red-950/20 dark:text-red-200">{error}</p>}
+
+      {!loading && !error && data && (
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-sm font-medium">Agent-level history</h3>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+              <span className="rounded border px-2 py-1 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
+                {data.history.agentLevel.totalRuns} recent run{data.history.agentLevel.totalRuns === 1 ? "" : "s"}
+              </span>
+              <span className="rounded border px-2 py-1 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
+                Last run: {formatDateTime(data.history.agentLevel.lastRunAt)}
+              </span>
+              {Object.entries(data.history.agentLevel.statusCounts).map(([status, count]) => (
+                <span key={status} className="rounded border px-2 py-1 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
+                  {status}: {count}
+                </span>
+              ))}
+            </div>
+            {data.history.emptyMessage && (
+              <p className="mt-2 rounded-md border border-dashed p-3 text-xs text-zinc-500">{data.history.emptyMessage}</p>
+            )}
+          </div>
+
+          <div>
+            <h3 className="text-sm font-medium">Task-level history</h3>
+            {data.history.taskLevel.length === 0 ? (
+              <p className="mt-2 rounded-md border border-dashed p-3 text-xs text-zinc-500">No task-level run records are available for this agent.</p>
+            ) : (
+              <div className="mt-2 overflow-x-auto">
+                <table className="min-w-full text-left text-xs">
+                  <thead className="text-zinc-500">
+                    <tr>
+                      <th className="py-2 pr-3 font-medium">Task</th>
+                      <th className="py-2 pr-3 font-medium">Status</th>
+                      <th className="py-2 pr-3 font-medium">Started</th>
+                      <th className="py-2 pr-3 font-medium">Completed</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-200/70 dark:divide-white/[0.06]">
+                    {data.history.taskLevel.map((task) => (
+                      <tr key={task.id}>
+                        <td className="max-w-[18rem] py-2 pr-3">
+                          <a href={`/tasks/${task.id}`} className="truncate text-blue-700 hover:underline dark:text-blue-300">
+                            {task.title}
+                          </a>
+                          <div className="font-mono text-[0.68rem] text-zinc-400">{task.id}</div>
+                        </td>
+                        <td className="py-2 pr-3">{task.status}</td>
+                        <td className="py-2 pr-3">{formatDateTime(task.startedAt)}</td>
+                        <td className="py-2 pr-3">{formatDateTime(task.completedAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <MetadataCluster title="Schedule state">
+            {data.scheduleState.schedules.length === 0 ? (
+              <EmptyLine>{data.scheduleState.message}</EmptyLine>
+            ) : (
+              data.scheduleState.schedules.map((schedule) => (
+                <MetadataLine
+                  key={schedule.id}
+                  label={schedule.title ?? schedule.kind ?? schedule.id}
+                  value={`${schedule.enabled ? "enabled" : "disabled"} - last ${formatDateTime(schedule.lastRunAt)} - next ${formatDateTime(schedule.nextRunAt)}`}
+                />
+              ))
+            )}
+          </MetadataCluster>
+
+          <MetadataCluster title="Tools and apps">
+            {data.tools.length === 0 ? (
+              <EmptyLine>{data.toolsEmptyMessage}</EmptyLine>
+            ) : (
+              data.tools.map((tool) => (
+                <MetadataLine key={`${tool.source}:${tool.slug}`} label={tool.label} value={tool.source === "runtime-default" ? "runtime default" : tool.slug} />
+              ))
+            )}
+            {data.connectedApps.length === 0 ? (
+              <EmptyLine>{data.connectedAppsEmptyMessage}</EmptyLine>
+            ) : (
+              data.connectedApps.map((app) => (
+                <MetadataLine key={app.id} label={app.displayName} value={`${app.connectorSlug} - ${app.status}`} />
+              ))
+            )}
+          </MetadataCluster>
+
+          <MetadataCluster title="Memory metadata">
+            {data.memory.roleMemory.length === 0 && data.memory.hiveMemory.length === 0 ? (
+              <EmptyLine>{data.memory.emptyMessage}</EmptyLine>
+            ) : (
+              <>
+                {data.memory.roleMemory.map((memory) => (
+                  <MetadataLine key={memory.id} label={`role memory ${memory.id}`} value={`${memory.sensitivity} - confidence ${memory.confidence}`} />
+                ))}
+                {data.memory.hiveMemory.map((memory) => (
+                  <MetadataLine key={memory.id} label={`hive memory ${memory.id}`} value={`${memory.category} - ${memory.sensitivity}`} />
+                ))}
+              </>
+            )}
+          </MetadataCluster>
+
+          <MetadataCluster title="Files and artifacts">
+            {data.files.attachments.length === 0 && data.files.workProducts.length === 0 ? (
+              <EmptyLine>{data.files.emptyMessage}</EmptyLine>
+            ) : (
+              <>
+                {data.files.attachments.map((file) => (
+                  <MetadataLine key={file.id} label={file.filename} value={`${file.mimeType ?? "unknown type"} - ${file.sizeBytes} bytes`} />
+                ))}
+                {data.files.workProducts.map((artifact) => (
+                  <MetadataLine key={artifact.id} label={artifact.fileLabel} value={`${artifact.artifactKind ?? "artifact"} - ${artifact.sensitivity}`} />
+                ))}
+              </>
+            )}
+          </MetadataCluster>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function MetadataCluster({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <h3 className="text-sm font-medium">{title}</h3>
+      <div className="mt-2 grid gap-2 md:grid-cols-2">{children}</div>
+    </div>
+  );
+}
+
+function MetadataLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md border border-zinc-200/70 px-3 py-2 text-xs dark:border-white/[0.07]">
+      <div className="truncate font-medium text-zinc-700 dark:text-zinc-200">{label}</div>
+      <div className="truncate text-zinc-500">{value}</div>
+    </div>
+  );
+}
+
+function EmptyLine({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="rounded-md border border-dashed border-zinc-300/60 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700/60">
+      {children}
+    </p>
   );
 }
 

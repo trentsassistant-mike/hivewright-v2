@@ -1,7 +1,5 @@
-import "dotenv/config";
 import postgres from "postgres";
 import { getTerminalVerificationDecision } from "../src/supervisor/scan";
-import { requireEnv } from "../src/lib/required-env";
 
 type UnsatRow = {
   report_id: string;
@@ -25,7 +23,9 @@ type Example = {
   hasFailureReason: boolean;
 };
 
-const DATABASE_URL = requireEnv("DATABASE_URL");
+const DATABASE_URL =
+  process.env.DATABASE_URL ||
+  "postgresql://hivewright:placeholder@localhost:5432/hivewrightv2";
 
 const sql = postgres(DATABASE_URL);
 

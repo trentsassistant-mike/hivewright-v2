@@ -5,6 +5,7 @@ import { testSql as sql, truncateAll } from "../_lib/test-db";
 const authState = vi.hoisted(() => ({
   authHeader: null as string | null,
   supervisorSession: null as string | null,
+  sessionUser: null as { email: string } | null,
 }));
 
 vi.mock("next/headers", () => ({
@@ -18,7 +19,14 @@ vi.mock("next/headers", () => ({
   },
 }));
 
+vi.mock("@/auth", () => ({
+  auth: async () => (authState.sessionUser ? { user: authState.sessionUser } : null),
+}));
+
 const INTERNAL_TOKEN = "goal-comments-attribution-token";
+const OWNER_USER_ID = "11111111-2222-4333-8444-555555555555";
+const MEMBER_USER_ID = "22222222-3333-4444-8555-666666666666";
+const VIEWER_USER_ID = "33333333-4444-4555-8666-777777777777";
 let hiveId: string;
 let goalId: string;
 let supervisorSessionId: string;
@@ -39,6 +47,7 @@ describe.sequential("POST /api/goals/[id]/comments — internal-service-account 
     process.env.INTERNAL_SERVICE_TOKEN = INTERNAL_TOKEN;
     authState.authHeader = `Bearer ${INTERNAL_TOKEN}`;
     authState.supervisorSession = null;
+    authState.sessionUser = null;
 
     await truncateAll(sql);
     const [hive] = await sql<{ id: string }[]>`
@@ -61,7 +70,28 @@ describe.sequential("POST /api/goals/[id]/comments — internal-service-account 
     delete process.env.INTERNAL_SERVICE_TOKEN;
     authState.authHeader = null;
     authState.supervisorSession = null;
+    authState.sessionUser = null;
   });
+
+  async function seedSessionUser(
+    userId: string,
+    email: string,
+    isSystemOwner: boolean,
+    membershipRole?: "member" | "viewer",
+  ) {
+    await sql`
+      INSERT INTO users (id, email, password_hash, is_system_owner)
+      VALUES (${userId}::uuid, ${email}, 'test-hash', ${isSystemOwner})
+    `;
+    if (membershipRole) {
+      await sql`
+        INSERT INTO hive_memberships (user_id, hive_id, role)
+        VALUES (${userId}::uuid, ${hiveId}::uuid, ${membershipRole})
+      `;
+    }
+    authState.authHeader = null;
+    authState.sessionUser = { email };
+  }
 
   it("attributes EA-style comments (internal token, no createdBy) as 'system', not 'owner'", async () => {
     const response = await createComment(
@@ -111,5 +141,54 @@ describe.sequential("POST /api/goals/[id]/comments — internal-service-account 
     expect(response.status).toBe(201);
     const json = (await response.json()) as { data: { comment: { createdBy: string } } };
     expect(json.data.comment.createdBy).toBe("doctor");
+  });
+
+  it("attributes real system-owner session comments as 'owner' by default", async () => {
+    await seedSessionUser(OWNER_USER_ID, "owner-comments-attribution@test.local", true);
+
+    const response = await createComment(
+      makeRequest({ body: "Owner approval note." }),
+      { params: Promise.resolve({ id: goalId }) },
+    );
+    expect(response.status).toBe(201);
+    const json = (await response.json()) as { data: { comment: { createdBy: string } } };
+    expect(json.data.comment.createdBy).toBe("owner");
+  });
+
+  it("allows same-hive member comments but forces system attribution", async () => {
+    await seedSessionUser(
+      MEMBER_USER_ID,
+      "member-comments-attribution@test.local",
+      false,
+      "member",
+    );
+
+    const response = await createComment(
+      makeRequest({ body: "Member operational note.", createdBy: "owner" }),
+      { params: Promise.resolve({ id: goalId }) },
+    );
+    expect(response.status).toBe(201);
+    const json = (await response.json()) as { data: { comment: { createdBy: string } } };
+    expect(json.data.comment.createdBy).toBe("system");
+  });
+
+  it("rejects same-hive viewer comments", async () => {
+    await seedSessionUser(
+      VIEWER_USER_ID,
+      "viewer-comments-attribution@test.local",
+      false,
+      "viewer",
+    );
+
+    const response = await createComment(
+      makeRequest({ body: "Viewer write attempt." }),
+      { params: Promise.resolve({ id: goalId }) },
+    );
+    expect(response.status).toBe(403);
+
+    const rows = await sql`
+      SELECT id FROM goal_comments WHERE goal_id = ${goalId} AND body = 'Viewer write attempt.'
+    `;
+    expect(rows.length).toBe(0);
   });
 });

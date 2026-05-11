@@ -18,7 +18,7 @@ set -euo pipefail
 #   2 — required binary not found
 # ---------------------------------------------------------------------------
 
-HIVEWRIGHT_ROOT="${HIVEWRIGHT_ROOT:-${HOME}/hivewright}"
+HIVEWRIGHT_ROOT="${HIVEWRIGHT_ROOT:-$HOME/hivewright}"
 REGISTRY="$HIVEWRIGHT_ROOT/config/registry.json"
 
 MODE="default"

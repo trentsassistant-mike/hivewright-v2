@@ -14,6 +14,11 @@ type GoalRow = {
   budget_cents: number | null;
   spent_cents: number;
   session_id: string | null;
+  outcome_classification: string | null;
+  outcome_classification_rationale: string | null;
+  outcome_process_references: unknown;
+  outcome_classified_at: Date | null;
+  outcome_classified_by: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -42,6 +47,11 @@ function mapGoalRow(r: GoalRow) {
     budgetCents: r.budget_cents,
     spentCents: r.spent_cents,
     sessionId: r.session_id,
+    outcomeClassification: r.outcome_classification,
+    outcomeClassificationRationale: r.outcome_classification_rationale,
+    outcomeProcessReferences: r.outcome_process_references,
+    outcomeClassifiedAt: r.outcome_classified_at,
+    outcomeClassifiedBy: r.outcome_classified_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -59,7 +69,10 @@ export async function GET(
 
     const goalRows = await sql`
       SELECT id, hive_id, parent_id, title, description, priority, status,
-             budget_cents, spent_cents, session_id, created_at, updated_at
+             budget_cents, spent_cents, session_id,
+             outcome_classification, outcome_classification_rationale,
+             outcome_process_references, outcome_classified_at, outcome_classified_by,
+             created_at, updated_at
       FROM goals
       WHERE id = ${id}
     `;
@@ -234,7 +247,10 @@ export async function PATCH(
         updated_at = NOW()
       WHERE id = ${id}
       RETURNING id, hive_id, parent_id, title, description, priority, status,
-                budget_cents, spent_cents, session_id, created_at, updated_at
+                budget_cents, spent_cents, session_id,
+                outcome_classification, outcome_classification_rationale,
+                outcome_process_references, outcome_classified_at, outcome_classified_by,
+                created_at, updated_at
     `;
 
     return jsonOk(mapGoalRow(rows[0]));

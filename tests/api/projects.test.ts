@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import fs from "fs";
+import path from "path";
+import { execSync } from "child_process";
 import { GET as getProjects, POST as createProject } from "@/app/api/projects/route";
 import { GET as getProjectById } from "@/app/api/projects/[id]/route";
 import { testSql as db, truncateAll } from "../_lib/test-db";
+import { hiveProjectsPath } from "@/hives/workspace-root";
 
 const TEST_PREFIX = "p4-proj-";
 
@@ -47,6 +51,49 @@ describe("POST /api/projects", () => {
     expect(body.data.name).toBe(TEST_PREFIX + "New Project");
     expect(body.data.hiveId).toBe(testHiveId);
     expect(body.data.workspacePath).toContain(TEST_PREFIX + "biz");
+    expect(body.data.gitRepo).toBe(false);
+  });
+
+  it("rejects gitRepo=true when the workspace is not an existing Git repository", async () => {
+    const req = new Request("http://localhost:3000/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        hiveId: testHiveId,
+        slug: TEST_PREFIX + "repo-backed",
+        name: TEST_PREFIX + "Repo-backed Project",
+        gitRepo: true,
+      }),
+    });
+
+    const res = await createProject(req);
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/existing Git repository/i);
+  });
+
+  it("preserves explicit gitRepo=true for an existing Git repository workspace", async () => {
+    const repoPath = path.join(hiveProjectsPath(TEST_PREFIX + "biz"), TEST_PREFIX + "repo-existing");
+    fs.mkdirSync(repoPath, { recursive: true });
+    execSync("git init", { cwd: repoPath, stdio: "ignore" });
+
+    const req = new Request("http://localhost:3000/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        hiveId: testHiveId,
+        slug: TEST_PREFIX + "repo-existing",
+        name: TEST_PREFIX + "Existing Repo Project",
+        workspacePath: repoPath,
+        gitRepo: true,
+      }),
+    });
+
+    const res = await createProject(req);
+
+    expect(res.status).toBe(201);
+    const body = await res.json();
     expect(body.data.gitRepo).toBe(true);
   });
 

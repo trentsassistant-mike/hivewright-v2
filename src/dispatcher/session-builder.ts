@@ -55,13 +55,15 @@ export async function buildSessionContext(
 
   // 4b. If task has a projectId, use project workspace instead
   let projectWorkspace: string | null = biz?.workspace_path ?? null;
+  let gitBackedProject = false;
   if (task.projectId) {
     const [proj] = await sql`
-      SELECT workspace_path FROM projects WHERE id = ${task.projectId}
+      SELECT workspace_path, git_repo FROM projects WHERE id = ${task.projectId}
     `;
     if (proj?.workspace_path) {
       projectWorkspace = proj.workspace_path as string;
     }
+    gitBackedProject = proj?.git_repo === true;
   }
 
   // Build the shared Hive Context block for the executor spawn. Sits
@@ -229,13 +231,11 @@ export async function buildSessionContext(
     }
   }
 
-  const isQaReviewTask = (role.slug === "qa" || task.title.startsWith("[QA]"));
-  const isQaReplanTask = task.title.startsWith("[Replan] QA failed repeatedly");
-  const contextPolicy = isQaReviewTask || isQaReplanTask
-    ? { mode: "lean" as const, reason: "review_replan_cost_control" as const }
-    : (role.type as string | null) === "executor"
-      ? { mode: "lean" as const, reason: "executor_default" as const }
-      : { mode: "full" as const, reason: "non_executor" as const };
+  const roleType = role.type as string | null;
+  const isLeanSystemReviewTask =
+    roleType === "qa" ||
+    task.title.startsWith("[QA]") ||
+    task.title.startsWith("[Replan] QA failed repeatedly");
 
   return {
     task: taskWithAttachments,
@@ -245,6 +245,7 @@ export async function buildSessionContext(
     standingInstructions,
     goalContext,
     projectWorkspace,
+    gitBackedProject,
     baseProjectWorkspace: projectWorkspace,
     hiveWorkspacePath: (biz?.workspace_path as string | null) ?? null,
     imageWorkProducts: await buildImageWorkProductContext(sql, task),
@@ -256,7 +257,9 @@ export async function buildSessionContext(
     fallbackAdapterType,
     credentials,
     toolsConfig,
-    contextPolicy,
+    contextPolicy: (roleType === "executor" || isLeanSystemReviewTask)
+      ? { mode: "lean", reason: roleType === "executor" ? "executor_default" : "review_replan_cost_control" }
+      : { mode: "full", reason: "non_executor" },
   };
 }
 

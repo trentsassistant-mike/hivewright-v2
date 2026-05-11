@@ -1,7 +1,6 @@
 import postgres from "postgres";
-import { requireEnv } from "@/lib/required-env";
 
-const DATABASE_URL = requireEnv("DATABASE_URL");
+const DATABASE_URL = process.env.DATABASE_URL || "postgresql://hivewright@localhost:5432/hivewrightv2";
 
 const globalForDb = globalThis as unknown as { sql: ReturnType<typeof postgres> };
 

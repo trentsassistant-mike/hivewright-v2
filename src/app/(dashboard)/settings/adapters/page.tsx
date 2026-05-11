@@ -54,7 +54,7 @@ const ADAPTER_FIELDS: Record<string, { description: string; fields: FieldDef[] }
     description: "Uses Google's Gemini CLI. Configure GEMINI_API_KEY for unattended production, or pass through Vertex/ADC, GCA, or a stable GEMINI_CLI_HOME for OAuth.",
     fields: [
       { label: "Default Model", key: "defaultModel", placeholder: "google/gemini-3.1-flash-lite-preview", type: "select", options: FALLBACK_MODELS },
-      { label: "Gemini CLI Home", key: "geminiCliHome", placeholder: "~/.gemini-cli", type: "text", description: "Optional stable home for OAuth/GCA state. Leave blank for API-key or Vertex env modes." },
+      { label: "Gemini CLI Home", key: "geminiCliHome", placeholder: "/home/hivewright/.gemini-cli", type: "text", description: "Optional stable home for OAuth/GCA state. Leave blank for API-key or Vertex env modes." },
     ],
   },
   openclaw: {
@@ -67,7 +67,7 @@ const ADAPTER_FIELDS: Record<string, { description: string; fields: FieldDef[] }
   ollama: {
     description: "Local models via Ollama's OpenAI-compatible API. Zero API cost.",
     fields: [
-      { label: "API Endpoint", key: "apiEndpoint", placeholder: "http://localhost:11434", type: "text", description: "Ollama server address. Default port is 11434." },
+      { label: "API Endpoint", key: "apiEndpoint", placeholder: "http://192.168.50.68:11434", type: "text", description: "Ollama server address. Default port is 11434." },
       { label: "Default Model", key: "defaultModel", placeholder: "qwen3:32b", type: "text", description: "Model name as shown in 'ollama list'." },
     ],
   },

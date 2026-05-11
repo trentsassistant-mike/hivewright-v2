@@ -11,6 +11,7 @@ import {
 } from "fs";
 import { tmpdir } from "os";
 import path from "path";
+import { resolveRuntimePath } from "../src/runtime/paths";
 
 type Severity = "pass" | "warn" | "high" | "critical";
 type CheckStatus = "pass" | "warn" | "fail" | "error";
@@ -37,10 +38,9 @@ type CheckResult = {
 };
 
 const repoRoot = process.cwd();
-const reportDir = path.resolve(
-  repoRoot,
-  process.env.SECURITY_SCAN_REPORT_DIR ?? ".security-reports",
-);
+const reportDir = process.env.SECURITY_SCAN_REPORT_DIR
+  ? path.resolve(process.env.SECURITY_SCAN_REPORT_DIR)
+  : resolveRuntimePath(["reports", "security"]);
 const jsonReportPath = path.join(reportDir, "baseline-security-scan.json");
 const markdownReportPath = path.join(reportDir, "baseline-security-scan.md");
 const gitleaksReportPath = path.join(reportDir, "gitleaks.json");

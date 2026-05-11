@@ -1,6 +1,5 @@
 import "dotenv/config";
 import postgres from "postgres";
-import { requireEnv } from "../src/lib/required-env";
 
 const DEPRECATED_MODEL = "anthropic/claude-haiku-4-5";
 const FAILURE_REASON =
@@ -13,7 +12,8 @@ type Candidate = {
   completed_sibling_ids: string[];
 };
 
-const databaseUrl = requireEnv("DATABASE_URL");
+const databaseUrl =
+  process.env.DATABASE_URL ?? "postgresql://hivewright@localhost:5432/hivewrightv2";
 const dryRun = process.argv.includes("--dry-run");
 
 async function main() {

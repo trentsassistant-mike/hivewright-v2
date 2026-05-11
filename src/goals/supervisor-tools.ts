@@ -4,7 +4,19 @@ import type { SupervisorTool } from "./types";
 import { emitDecisionEvent } from "../dispatcher/event-emitter";
 import { parkTaskIfRecoveryBudgetExceeded } from "../recovery/recovery-budget";
 import { upsertGoalPlan } from "./goal-documents";
-import { completeGoal, parseGoalCompletionStatus } from "./completion";
+import {
+  completeGoal,
+  parseCompletionEvidenceBundle,
+  parseGoalCompletionStatus,
+} from "./completion";
+import { startPipelineRun } from "../pipelines/service";
+import {
+  LEARNING_GATE_CATEGORIES,
+  hasOutcomeClassificationInput,
+  parseLearningGateResult,
+  parseOutcomeClassificationRecord,
+  recordGoalOutcomeClassification,
+} from "./outcome-records";
 
 export const SUPERVISOR_TOOLS: SupervisorTool[] = [
   {
@@ -37,7 +49,7 @@ export const SUPERVISOR_TOOLS: SupervisorTool[] = [
   {
     name: "create_goal_plan",
     description:
-      "Create or update the durable plan document for this goal. Call this BEFORE creating execution tasks. The plan must cover: Goal Summary, Desired Outcome, Success Criteria, Constraints, Risks/Unknowns, Research Needed, Workstreams, Sprint Strategy, Acceptance Rules, Evidence Required. Calling this again updates the existing plan and bumps the revision counter.",
+      "Create or update the durable outcome plan for this goal. Call this BEFORE creating execution tasks. The plan must cover: Goal Summary, Desired Outcome, Outcome Classification (outcome-led or process-bound), Applicable Policies / Rules / Pipelines, Professional Process Inferred, Success Criteria, Constraints, Risks/Unknowns, Research Needed, Workstreams, Sprint Strategy, Acceptance Rules, Evidence Required, and Learning Gate Plan. Calling this again updates the existing plan and bumps the revision counter.",
     parameters: {
       title: { type: "string", description: "Plan title (e.g., '<goal title> Plan')", required: true },
       body: {
@@ -45,6 +57,71 @@ export const SUPERVISOR_TOOLS: SupervisorTool[] = [
         description: "Full markdown plan body with all required sections",
         required: true,
       },
+      outcome_classification: {
+        type: "string",
+        description: "Optional structured classification for this goal: outcome-led or process-bound",
+      },
+      classification_rationale: {
+        type: "string",
+        description: "Required when outcome_classification is supplied; why this goal is outcome-led or process-bound",
+      },
+      applicable_references: {
+        type: "array",
+        description:
+          "Optional policy/rule/pipeline references that apply to a process-bound classification. Each item should include type plus id, slug, title, source, or note where available.",
+      },
+    },
+  },
+  {
+    name: "record_outcome_classification",
+    description:
+      "Persist the supervisor's classification of this goal as outcome-led or process-bound, with rationale and any applicable policy/rule/pipeline references. Use this after checking memory, rules, standing instructions, and pipeline templates, and before creating execution work.",
+    parameters: {
+      classification: {
+        type: "string",
+        description: "Exactly one of: outcome-led, process-bound",
+        required: true,
+      },
+      rationale: {
+        type: "string",
+        description: "Why this classification applies to the goal",
+        required: true,
+      },
+      references: {
+        type: "array",
+        description:
+          "Applicable policy/rule/pipeline references where available. Each item should include type plus id, slug, title, source, or note.",
+      },
+    },
+  },
+  {
+    name: "list_pipeline_templates",
+    description:
+      "List active governed pipeline templates available to this hive so the supervisor can check whether the outcome is process-bound. Use this to find mandatory owner processes, owner-approved repeatable procedures, or high-confidence procedures where order/evidence/approval matters — not as a blanket requirement to pipeline all work.",
+    parameters: {},
+  },
+  {
+    name: "start_pipeline_run",
+    description:
+      "Start a selected active pipeline template for this goal/sprint when it materially fits because it is a mandatory owner process, owner-approved repeatable process, or process-bound procedure where order/evidence/approval matters. Requires a clear selection_rationale; do not use pipelines just because a template loosely resembles outcome-led exploratory work.",
+    parameters: {
+      template_id: { type: "string", description: "Pipeline template id selected from list_pipeline_templates", required: true },
+      source_task_id: { type: "string", description: "Optional existing source work-task id; also accepted as sourceTaskId" },
+      source_context: { type: "string", description: "Source work context if no source task exists, or extra context for the pipeline" },
+      sprint_number: { type: "number", description: "Sprint number this pipeline should count toward for supervisor wake-up", required: true },
+      selection_rationale: { type: "string", description: "Why this template fits the current goal work", required: true },
+      confidence: { type: "number", description: "Supervisor confidence from 0 to 1" },
+    },
+  },
+  {
+    name: "propose_pipeline_template",
+    description:
+      "Create a draft governed sub-goal to design a new reusable pipeline when no active template fits but the work may deserve a repeatable process. This is a self-evolution path: propose/design/dry-run/promote with owner approval before any policy or pipeline becomes mandatory — not uncontrolled production mutation.",
+    parameters: {
+      title: { type: "string", description: "Sub-goal title for the new reusable pipeline", required: true },
+      need: { type: "string", description: "Why existing templates do not fit", required: true },
+      proposed_steps: { type: "array", description: "Initial proposed pipeline step names/slugs", required: true },
+      evidence: { type: "string", description: "Evidence/rationale from template review", required: true },
     },
   },
   {
@@ -87,12 +164,24 @@ export const SUPERVISOR_TOOLS: SupervisorTool[] = [
   },
   {
     name: "mark_goal_achieved",
-    description: "Record the current goal's final status. Use blocked_on_owner_channel when work is ready but owner-controlled channel/action remains.",
+    description:
+      "Mark the current goal as achieved only after success criteria are satisfied. Evidence is required: do not mark a goal achieved without evidence proving the outcome is complete. Include artifact paths/URLs, test results, review notes, screenshots, decision IDs, or comparable proof, plus the lightweight Learning Gate result from the completion review.",
     parameters: {
       summary: { type: "string", description: "Completion summary", required: true },
       completion_status: {
         type: "string",
-        description: "Optional final status: achieved, execution_ready, blocked_on_owner_channel",
+        description:
+          "Optional structured final state: achieved, execution_ready, or blocked_on_owner_channel. Use blocked_on_owner_channel when the package is ready but owner-controlled sending/channel approval is still required.",
+      },
+      evidence: {
+        type: "array",
+        description:
+          "REQUIRED evidence bundle. Each item must include type and description plus a non-empty reference or value. Use artifact paths/URLs, test command/results, review notes, screenshots, decision IDs, work-product IDs, or other proof that completion was verified.",
+        required: true,
+      },
+      learning_gate: {
+        type: "object",
+        description: `Learning Gate result with category (${LEARNING_GATE_CATEGORIES.join(" | ")}), rationale, optional action, and optional references.`,
       },
     },
   },
@@ -170,6 +259,8 @@ export async function executeSupervisorTool(
         }
       }
       const projectId = requestedProjectId ?? (goal?.project_id as string | null) ?? null;
+      const pipelineGate = await rejectDirectContentTaskWhenPipelineFits(sql, hiveId, args, taskKind);
+      if (pipelineGate) return pipelineGate;
       const sourceTask = await resolveSourceTask(sql, hiveId, goalId, args, "create_task");
       if (!sourceTask.ok) return sourceTask.result;
       const parentTaskId = sourceTask.taskId;
@@ -211,16 +302,182 @@ export async function executeSupervisorTool(
       if (!body || body.trim().length === 0) {
         return { success: false, message: "create_goal_plan requires non-empty body" };
       }
+      const classification = hasOutcomeClassificationInput(args)
+        ? parseOutcomeClassificationRecord(args)
+        : null;
+      if (classification && !classification.ok) {
+        return { success: false, message: `create_goal_plan rejected: ${classification.error}` };
+      }
       const plan = await upsertGoalPlan(sql, goalId, {
         title,
         body,
         createdBy: "goal-supervisor",
       });
+      if (classification?.ok) {
+        const recorded = await recordGoalOutcomeClassification(sql, goalId, classification.record);
+        if (!recorded) {
+          return { success: false, message: `create_goal_plan persisted but failed to classify missing goal: ${goalId}` };
+        }
+      }
       return {
         success: true,
         message: `Goal plan ${plan.revision === 1 ? "created" : `updated (revision ${plan.revision})`}`,
-        data: { planId: plan.id, revision: plan.revision },
+        data: {
+          planId: plan.id,
+          revision: plan.revision,
+          outcomeClassification: classification?.ok ? classification.record.classification : undefined,
+        },
       };
+    }
+    case "record_outcome_classification": {
+      const parsed = parseOutcomeClassificationRecord(args);
+      if (!parsed.ok) {
+        return { success: false, message: `record_outcome_classification rejected: ${parsed.error}` };
+      }
+      const recorded = await recordGoalOutcomeClassification(sql, goalId, parsed.record);
+      if (!recorded) return { success: false, message: `Goal not found: ${goalId}` };
+      return {
+        success: true,
+        message: `Goal classified as ${parsed.record.classification}`,
+        data: {
+          classification: parsed.record.classification,
+          references: parsed.record.references,
+        },
+      };
+    }
+    case "list_pipeline_templates": {
+      const templates = await sql`
+        SELECT
+          pt.id,
+          pt.scope,
+          pt.hive_id,
+          pt.slug,
+          pt.name,
+          pt.department,
+          pt.description,
+          pt.mode,
+          pt.version,
+          pt.max_total_cost_cents,
+          pt.final_output_contract,
+          COUNT(ps.id)::int AS step_count,
+          COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'order', ps.step_order,
+                'slug', ps.slug,
+                'name', ps.name,
+                'roleSlug', ps.role_slug,
+                'duty', ps.duty,
+                'acceptanceCriteria', ps.acceptance_criteria,
+                'outputContract', ps.output_contract
+              ) ORDER BY ps.step_order ASC
+            ) FILTER (WHERE ps.id IS NOT NULL),
+            '[]'::jsonb
+          ) AS steps
+        FROM pipeline_templates pt
+        LEFT JOIN pipeline_steps ps ON ps.template_id = pt.id
+        WHERE pt.active = true
+          AND (pt.scope = 'global' OR pt.hive_id = ${hiveId})
+        GROUP BY pt.id
+        ORDER BY pt.department ASC, pt.name ASC, pt.version DESC
+      `;
+      return {
+        success: true,
+        message: `${templates.length} active pipeline template(s) available`,
+        data: templates.map((t) => ({
+          id: t.id,
+          scope: t.scope,
+          hiveId: t.hive_id,
+          slug: t.slug,
+          name: t.name,
+          department: t.department,
+          description: t.description,
+          mode: t.mode,
+          version: t.version,
+          maxTotalCostCents: t.max_total_cost_cents,
+          finalOutputContract: t.final_output_contract,
+          stepCount: Number(t.step_count ?? 0),
+          steps: t.steps,
+        })),
+      };
+    }
+    case "start_pipeline_run": {
+      const templateId = readStringArg(args, "template_id") ?? readStringArg(args, "templateId");
+      const sprintNumber = readNumberArg(args, "sprint_number") ?? readNumberArg(args, "sprintNumber");
+      const selectionRationale = readStringArg(args, "selection_rationale") ?? readStringArg(args, "selectionRationale");
+      if (!templateId) return { success: false, message: "start_pipeline_run requires template_id" };
+      if (!Number.isInteger(sprintNumber) || (sprintNumber as number) < 1) {
+        return { success: false, message: "start_pipeline_run requires positive integer sprint_number" };
+      }
+      if (!selectionRationale) return { success: false, message: "start_pipeline_run requires selection_rationale" };
+      const sourceTask = await resolveSourceTask(sql, hiveId, goalId, args, "start_pipeline_run");
+      if (!sourceTask.ok) return sourceTask.result;
+      const sourceTaskId = sourceTask.taskId;
+      const suppliedSourceContext = readStringArg(args, "source_context") ?? readStringArg(args, "sourceContext");
+      const sourceContext = suppliedSourceContext ?? (sourceTaskId ? await sourceContextFromTask(sql, sourceTaskId) : null);
+      if (!sourceContext) {
+        return { success: false, message: "start_pipeline_run requires source_context when source_task_id is omitted" };
+      }
+      if (sourceTaskId) {
+        const [existing] = await sql<{ id: string }[]>`
+          SELECT id FROM pipeline_runs
+          WHERE hive_id = ${hiveId}
+            AND source_task_id = ${sourceTaskId}
+            AND status = 'active'
+          LIMIT 1
+        `;
+        if (existing) {
+          return { success: false, message: `source task already has an active pipeline run: ${existing.id}` };
+        }
+      }
+      const confidence = readNumberArg(args, "confidence");
+      const handoff = [
+        `Supervisor selected this pipeline for goal ${goalId}, sprint ${sprintNumber}.`,
+        `selection_rationale: ${selectionRationale}`,
+        confidence === null ? null : `confidence: ${confidence}`,
+      ].filter(Boolean).join("\n");
+      try {
+        const result = await startPipelineRun(sql, {
+          hiveId,
+          templateId,
+          sourceContext,
+          sourceTaskId: sourceTaskId ?? undefined,
+          goalId,
+          sprintNumber: sprintNumber as number,
+          supervisorHandoff: handoff,
+        });
+        return { success: true, message: `Pipeline run started: ${result.runId}`, data: result };
+      } catch (error) {
+        return { success: false, message: error instanceof Error ? error.message : "Failed to start pipeline run" };
+      }
+    }
+    case "propose_pipeline_template": {
+      const title = readStringArg(args, "title");
+      const need = readStringArg(args, "need");
+      const evidence = readStringArg(args, "evidence");
+      if (!title) return { success: false, message: "propose_pipeline_template requires title" };
+      if (!need) return { success: false, message: "propose_pipeline_template requires need" };
+      if (!evidence) return { success: false, message: "propose_pipeline_template requires evidence" };
+      const proposedSteps = Array.isArray(args.proposed_steps)
+        ? args.proposed_steps.map(String)
+        : Array.isArray(args.proposedSteps)
+          ? args.proposedSteps.map(String)
+          : [];
+      const description = [
+        "Design a reusable governed HiveWright pipeline template for this recurring work class.",
+        "",
+        `need: ${need}`,
+        `evidence: ${evidence}`,
+        `proposed_steps: ${JSON.stringify(proposedSteps)}`,
+        "",
+        "Governance path: propose the template, implement it inactive/research-mode first, dry-run it against evidence, then promote only after proof.",
+      ].join("\n");
+      const [sg] = await sql`
+        INSERT INTO goals (hive_id, parent_id, title, description, status)
+        VALUES (${hiveId}, ${goalId}, ${title}, ${description}, 'active')
+        RETURNING id
+      `;
+      return { success: true, message: `Pipeline proposal sub-goal created: ${sg.id}`, data: { goalId: sg.id } };
     }
     case "create_sub_goal": {
       const [sg] = await sql`
@@ -291,13 +548,24 @@ export async function executeSupervisorTool(
       if (!summary || summary.trim().length === 0) {
         return { success: false, message: "mark_goal_achieved requires non-empty summary" };
       }
-      const completionStatusInput = args.completion_status ?? args.completionStatus;
-      const completionStatus = parseGoalCompletionStatus(completionStatusInput);
-      if (completionStatusInput !== undefined && !completionStatus) {
-        return { success: false, message: "completion_status must be one of achieved, execution_ready, blocked_on_owner_channel" };
+      const learningGate = parseLearningGateResult(args.learning_gate ?? args.learningGate);
+      if (!learningGate.ok) {
+        return { success: false, message: `mark_goal_achieved rejected: ${learningGate.error}` };
       }
-      const result = await completeGoal(sql, goalId, summary, completionStatus ? { completionStatus } : {});
-      return { success: true, message: `Goal status ${result.status}` };
+      const evidence = parseCompletionEvidenceBundle(args.evidence ?? args.evidenceBundle ?? args.evidence_bundle);
+      if (!evidence.ok) {
+        return { success: false, message: `mark_goal_achieved rejected: ${evidence.error}` };
+      }
+      const completionStatus = parseGoalCompletionStatus(args.completion_status ?? args.completionStatus);
+      if ((args.completion_status ?? args.completionStatus) !== undefined && !completionStatus) {
+        return { success: false, message: "mark_goal_achieved rejected: completion_status must be achieved, execution_ready, or blocked_on_owner_channel" };
+      }
+      const result = await completeGoal(sql, goalId, summary, {
+        evidenceBundle: evidence.items,
+        learningGate: learningGate.result,
+        ...(completionStatus ? { completionStatus } : {}),
+      });
+      return { success: true, message: `Goal status set to ${result.status}` };
     }
     case "get_role_library": {
       const roles = await sql`
@@ -350,6 +618,49 @@ export async function executeSupervisorTool(
   }
 }
 
+export async function rejectDirectContentTaskWhenPipelineFits(
+  sql: Sql,
+  hiveId: string,
+  args: Record<string, unknown>,
+  taskKind: string,
+): Promise<ToolResult | null> {
+  if (taskKind === "research" || taskKind === "planning" || taskKind === "decision") return null;
+
+  const assignedTo = typeof args.assigned_to === "string" ? args.assigned_to : "";
+  const text = [args.title, args.brief, args.acceptance_criteria]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n")
+    .toLowerCase();
+  const contentRole = new Set([
+    "content-writer",
+    "content-review-agent",
+    "marketing-designer",
+    "social-media-manager",
+    "campaign-analyst",
+    "image-designer",
+    "frontend-designer",
+  ]).has(assignedTo);
+  const contentKeywords = /\b(copywriting|copy|landing page copy|landing-page copy|hero copy|cta|faq|metadata|publish handoff|newsletter|blog|social post|social media post|facebook ad|facbook ad|ad creative|advertisement|campaign creative|content package|draft|edit|publish|image asset|visual asset)\b/i.test(text);
+  if (!contentRole && !contentKeywords) return null;
+
+  const [template] = await sql<{ id: string; name: string }[]>`
+    SELECT id, name
+    FROM pipeline_templates
+    WHERE slug = 'content-publishing'
+      AND active = true
+      AND (scope = 'global' OR hive_id = ${hiveId})
+    ORDER BY version DESC
+    LIMIT 1
+  `;
+  if (!template) return null;
+
+  return {
+    success: false,
+    message: `create_task rejected: this looks like repeatable content/copywriting work and active pipeline '${template.name}' (slug='content-publishing') is available. Use list_pipeline_templates then start_pipeline_run with selection_rationale instead of creating direct execution tasks.`,
+    data: { requiredPipelineSlug: "content-publishing", templateId: template.id },
+  };
+}
+
 type SourceTaskResolution =
   | { ok: true; taskId: string | null }
   | { ok: false; result: ToolResult };
@@ -397,6 +708,32 @@ async function resolveSourceTask(
 function readSourceTaskId(args: Record<string, unknown>): string | null {
   const value = args.sourceTaskId ?? args.source_task_id;
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readStringArg(args: Record<string, unknown>, key: string): string | null {
+  const value = args[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readNumberArg(args: Record<string, unknown>, key: string): number | null {
+  const value = args[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}
+
+async function sourceContextFromTask(sql: Sql, taskId: string): Promise<string | null> {
+  const [task] = await sql<{ title: string; brief: string | null; acceptance_criteria: string | null }[]>`
+    SELECT title, brief, acceptance_criteria
+    FROM tasks
+    WHERE id = ${taskId}
+  `;
+  if (!task) return null;
+  return [
+    `title: ${task.title}`,
+    task.brief ? `brief: ${task.brief}` : null,
+    task.acceptance_criteria ? `acceptance_criteria: ${task.acceptance_criteria}` : null,
+  ].filter(Boolean).join("\n");
 }
 
 function isUuidLike(value: string): boolean {

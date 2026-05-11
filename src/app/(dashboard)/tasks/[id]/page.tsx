@@ -3,7 +3,9 @@ import Link from "next/link";
 import { sql } from "@/app/api/_lib/db";
 import { LiveActivityPanel } from "@/components/live-activity-panel";
 import { AttachmentsPanel } from "@/components/attachments-panel";
+import { TaskPipelineRouter } from "@/components/task-pipeline-router";
 import { readLatestCodexEmptyOutputDiagnostic } from "@/runtime-diagnostics/codex-empty-output";
+import { readLatestTaskContextProvenance } from "@/provenance/task-context";
 
 export const dynamic = "force-dynamic";
 
@@ -67,6 +69,10 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
   );
 }
 
+function formatSourceClass(sourceClass: string) {
+  return sourceClass.replace(/_/g, " ");
+}
+
 export default async function TaskDetailPage({
   params,
 }: {
@@ -99,6 +105,7 @@ export default async function TaskDetailPage({
       : null;
 
   const codexEmptyOutputDiagnostic = await readLatestCodexEmptyOutputDiagnostic(sql, id);
+  const provenance = await readLatestTaskContextProvenance(sql, id);
 
   const workProducts = await sql<WorkProductRow[]>`
     SELECT id, content, summary, artifact_kind, mime_type, width, height,
@@ -136,6 +143,9 @@ export default async function TaskDetailPage({
         <p className="text-sm whitespace-pre-wrap">{task.brief}</p>
       </div>
 
+      {/* Pipeline routing */}
+      <TaskPipelineRouter hiveId={task.hive_id} taskId={task.id} taskTitle={task.title} />
+
       {/* Attachments */}
       <AttachmentsPanel scope="task" id={task.id} />
 
@@ -147,6 +157,42 @@ export default async function TaskDetailPage({
           taskTitle={task.title}
           taskStatus={task.status as "pending" | "active" | "completed" | "failed"}
         />
+      </div>
+
+      <div className="rounded-lg border p-4 space-y-3">
+        <div className="space-y-1">
+          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">
+            Context Provenance
+          </h2>
+          <p className="text-xs text-zinc-500">{provenance.disclaimer}</p>
+        </div>
+        {provenance.entries.length === 0 ? (
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            {provenance.status === "none"
+              ? "No retrieved memory/context sources were recorded for this task."
+              : "Retrieved memory/context provenance is unavailable for this task."}
+          </p>
+        ) : (
+          <ul className="divide-y rounded-md border">
+            {provenance.entries.map((entry) => (
+              <li key={`${entry.sourceClass}:${entry.reference}`} className="grid gap-1 p-3 text-sm sm:grid-cols-3 sm:gap-4">
+                <span className="font-medium capitalize text-zinc-700 dark:text-zinc-200">
+                  {formatSourceClass(entry.sourceClass)}
+                </span>
+                <span className="break-all font-mono text-xs text-zinc-700 dark:text-zinc-200 sm:col-span-2">
+                  {entry.reference}
+                </span>
+                {(entry.category || entry.sourceTaskId) && (
+                  <span className="text-xs text-zinc-500 sm:col-span-3">
+                    {entry.category ? `Category: ${entry.category}` : ""}
+                    {entry.category && entry.sourceTaskId ? " · " : ""}
+                    {entry.sourceTaskId ? `Source task: ${entry.sourceTaskId}` : ""}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {workProducts.length > 0 && (

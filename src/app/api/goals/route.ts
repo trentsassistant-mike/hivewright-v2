@@ -27,6 +27,11 @@ type GoalRow = {
   budget_cents: number | null;
   spent_cents: number;
   session_id: string | null;
+  outcome_classification: string | null;
+  outcome_classification_rationale: string | null;
+  outcome_process_references: unknown;
+  outcome_classified_at: Date | null;
+  outcome_classified_by: string | null;
   created_at: Date;
   updated_at: Date;
   archived_at: Date | null;
@@ -51,6 +56,11 @@ function mapGoalRow(r: GoalRow) {
     budgetCents: r.budget_cents,
     spentCents: r.spent_cents,
     sessionId: r.session_id,
+    outcomeClassification: r.outcome_classification,
+    outcomeClassificationRationale: r.outcome_classification_rationale,
+    outcomeProcessReferences: r.outcome_process_references,
+    outcomeClassifiedAt: r.outcome_classified_at,
+    outcomeClassifiedBy: r.outcome_classified_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     archivedAt: r.archived_at,
@@ -113,7 +123,8 @@ export async function GET(request: Request) {
     const dataQuery = `
       SELECT g.id, g.hive_id, g.parent_id, g.title, g.description, g.status,
              g.project_id, g.budget_cents, g.spent_cents, g.session_id, g.created_at, g.updated_at,
-             g.archived_at,
+             g.archived_at, g.outcome_classification, g.outcome_classification_rationale,
+             g.outcome_process_references, g.outcome_classified_at, g.outcome_classified_by,
              COUNT(t.id) AS total_tasks,
              COUNT(t.id) FILTER (WHERE t.status = 'completed') AS completed_tasks
       FROM goals g
@@ -144,7 +155,8 @@ export async function GET(request: Request) {
 //   1. Resolve caller identity via `requireApiUser()`.
 //   2. Enforce `canAccessHive()` on the supplied hiveId before INSERT.
 // Role-slug attribution for non-owner supervisor-originated top-level goals
-// remains blocked until role propagation lands in the JWT.
+// remains blocked until role propagation lands in the JWT — see the audit at
+// `docs/security/2026-04-22-goal-task-mutation-auth-seams.md`.
 export async function POST(request: Request) {
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
@@ -208,7 +220,10 @@ export async function POST(request: Request) {
             ${resolvedProjectId}
           )
           RETURNING id, hive_id, project_id, parent_id, title, description, status,
-                    budget_cents, spent_cents, session_id, created_at, updated_at, archived_at
+                    budget_cents, spent_cents, session_id,
+                    outcome_classification, outcome_classification_rationale,
+                    outcome_process_references, outcome_classified_at, outcome_classified_by,
+                    created_at, updated_at, archived_at
         `;
 
         const goal = rows[0] as unknown as GoalRow;

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { claimNextTask, completeTask, releaseTask } from "@/dispatcher/task-claimer";
+import { startPipelineRun } from "@/pipelines/service";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 let bizId: string;
@@ -190,5 +191,249 @@ describe("completeTask", () => {
     expect(updated.result_summary).toBe("Recovered after retry");
     expect(updated.failure_reason).toBe(warning);
     expect(updated.completed_at).not.toBeNull();
+  });
+});
+
+async function seedTwoStepPipelineForClaimedTask() {
+  const [template] = await sql<{ id: string }[]>`
+    INSERT INTO pipeline_templates (scope, hive_id, slug, name, department, final_output_contract, version, active)
+    VALUES ('hive', ${bizId}, 'claimer-test-pipeline', 'Claimer Test Pipeline', 'engineering', ${sql.json({ artifactKind: "handoff", requiredFields: ["summary", "verification"] })}, 1, true)
+    RETURNING id
+  `;
+  const steps = await sql<{ id: string; step_order: number }[]>`
+    INSERT INTO pipeline_steps (template_id, step_order, slug, name, role_slug, duty, qa_required, output_contract, acceptance_criteria, drift_check)
+    VALUES
+      (${template.id}, 1, 'build', 'Build', 'claimer-test-role', 'Build the requested item.', false, ${sql.json({ artifactKind: "build", requiredFields: ["summary", "verification"] })}, 'Build must satisfy the source request.', ${sql.json({ mode: "source_similarity", threshold: 0.3 })}),
+      (${template.id}, 2, 'review', 'Review', 'claimer-test-role', 'Review the requested item.', true, ${sql.json({ artifactKind: "review", requiredFields: ["verdict", "evidence"] })}, 'Review must produce a verdict.', ${sql.json({ mode: "source_similarity", threshold: 0.3 })})
+    RETURNING id, step_order
+  `;
+
+  return { templateId: template.id, firstStepId: steps[0].id, secondStepId: steps[1].id };
+}
+
+describe("completeTask pipeline advancement", () => {
+  it("advances a pipeline-created task and creates the next step task", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "Route this existing work through a pipeline.",
+    });
+
+    await completeTask(sql, started.taskId, `summary: Build completed through dispatcher path.
+verification: unit checked.`);
+
+    const stepRuns = await sql<{ step_id: string; task_id: string; status: string; result_summary: string | null }[]>`
+      SELECT step_id, task_id, status, result_summary
+      FROM pipeline_step_runs
+      WHERE run_id = ${started.runId}
+      ORDER BY created_at ASC
+    `;
+    const [run] = await sql<{ status: string; current_step_id: string }[]>`
+      SELECT status, current_step_id FROM pipeline_runs WHERE id = ${started.runId}
+    `;
+    const [nextTask] = await sql<{ assigned_to: string; parent_task_id: string | null; qa_required: boolean }[]>`
+      SELECT assigned_to, parent_task_id, qa_required FROM tasks WHERE id = ${stepRuns[1].task_id}
+    `;
+
+    expect(stepRuns).toHaveLength(2);
+    expect(stepRuns[0]).toMatchObject({ step_id: pipeline.firstStepId, task_id: started.taskId, status: "complete", result_summary: `summary: Build completed through dispatcher path.
+verification: unit checked.` });
+    expect(stepRuns[1]).toMatchObject({ step_id: pipeline.secondStepId, status: "pending" });
+    expect(run).toEqual({ status: "active", current_step_id: pipeline.secondStepId });
+    expect(nextTask).toEqual({ assigned_to: "claimer-test-role", parent_task_id: started.taskId, qa_required: true });
+  });
+
+  it("advances when required output fields are markdown bold labels", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "Route this existing work through a pipeline.",
+    });
+
+    await completeTask(sql, started.taskId, `**summary**
+Build completed through dispatcher path.
+
+**verification**
+Unit checked and source request preserved.`);
+
+    const stepRuns = await sql<{ step_id: string; status: string; result_summary: string | null }[]>`
+      SELECT step_id, status, result_summary
+      FROM pipeline_step_runs
+      WHERE run_id = ${started.runId}
+      ORDER BY created_at ASC
+    `;
+    const [run] = await sql<{ status: string; current_step_id: string }[]>`
+      SELECT status, current_step_id FROM pipeline_runs WHERE id = ${started.runId}
+    `;
+
+    expect(stepRuns).toHaveLength(2);
+    expect(stepRuns[0]).toMatchObject({ step_id: pipeline.firstStepId, status: "complete" });
+    expect(stepRuns[1]).toMatchObject({ step_id: pipeline.secondStepId, status: "pending" });
+    expect(run).toEqual({ status: "active", current_step_id: pipeline.secondStepId });
+  });
+
+  it("does not create pipeline rows when completing a non-pipeline task", async () => {
+    const [inserted] = await sql<{ id: string }[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+      VALUES (${bizId}, 'claimer-test-role', 'owner', 'flat-task', 'Flat task', 'active')
+      RETURNING id
+    `;
+
+    await completeTask(sql, inserted.id, "Flat task complete.");
+
+    const [counts] = await sql<{ runs: number; step_runs: number }[]>`
+      SELECT
+        (SELECT COUNT(*)::int FROM pipeline_runs) AS runs,
+        (SELECT COUNT(*)::int FROM pipeline_step_runs) AS step_runs
+    `;
+    expect(counts).toEqual({ runs: 0, step_runs: 0 });
+  });
+
+
+
+  it("marks a claimed pipeline step as running", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "Route this existing work through a pipeline.",
+    });
+
+    const claimed = await claimNextTask(sql, process.pid);
+    expect(claimed?.id).toBe(started.taskId);
+
+    const [stepRun] = await sql<{ status: string }[]>`
+      SELECT status FROM pipeline_step_runs WHERE task_id = ${started.taskId}
+    `;
+    expect(stepRun.status).toBe("running");
+  });
+
+  it("fails the pipeline cleanly when output contract fields are missing", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "Route this existing work through a pipeline.",
+    });
+
+    await completeTask(sql, started.taskId, "I did some work but did not provide the required labels.");
+
+    const [run] = await sql<{ status: string; supervisor_handoff: string | null }[]>`
+      SELECT status, supervisor_handoff FROM pipeline_runs WHERE id = ${started.runId}
+    `;
+    const [stepRun] = await sql<{ status: string; result_summary: string | null }[]>`
+      SELECT status, result_summary FROM pipeline_step_runs WHERE task_id = ${started.taskId}
+    `;
+    const [task] = await sql<{ status: string; failure_reason: string | null }[]>`
+      SELECT status, failure_reason FROM tasks WHERE id = ${started.taskId}
+    `;
+
+    expect(run.status).toBe("failed");
+    expect(run.supervisor_handoff).toContain("Pipeline output contract failed");
+    expect(stepRun.status).toBe("failed");
+    expect(task.status).toBe("failed");
+    expect(task.failure_reason).toContain("missing required field");
+  });
+
+  it("fails the pipeline cleanly when schema-valid output drifts from original source task intent", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    await sql`
+      UPDATE pipeline_steps
+      SET output_contract = ${sql.json({
+        artifactKind: "build",
+        requiredFields: ["summary", "verification", "status"],
+        schema: {
+          type: "object",
+          required: ["summary", "verification", "status"],
+          properties: {
+            summary: { type: "string" },
+            verification: { type: "array", items: { type: "string" } },
+            status: { enum: ["pass", "fail"] },
+          },
+        },
+      })}
+      WHERE id = ${pipeline.firstStepId}
+    `;
+    const [sourceTask] = await sql<{ id: string }[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, retry_after)
+      VALUES (${bizId}, 'claimer-test-role', 'owner', 'HiveWright blog post request', 'Write about HiveWright autonomous business operations and content strategy.', NOW() + INTERVAL '1 hour')
+      RETURNING id
+    `;
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "fallback source context",
+      sourceTaskId: sourceTask.id,
+    });
+
+    await completeTask(sql, started.taskId, JSON.stringify({
+      summary: "Prepared a frontend baseline implementation plan for responsive navigation.",
+      verification: ["reviewed component tree"],
+      status: "pass",
+    }));
+
+    const [run] = await sql<{ status: string; supervisor_handoff: string | null }[]>`
+      SELECT status, supervisor_handoff FROM pipeline_runs WHERE id = ${started.runId}
+    `;
+    const [task] = await sql<{ status: string; failure_reason: string | null }[]>`
+      SELECT status, failure_reason FROM tasks WHERE id = ${started.taskId}
+    `;
+
+    expect(run.status).toBe("failed");
+    expect(run.supervisor_handoff).toContain("source intent");
+    expect(task.status).toBe("failed");
+    expect(task.failure_reason).toContain("source intent");
+  });
+
+  it("fails the pipeline instead of retrying when step retry cap is reached", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    await sql`UPDATE pipeline_steps SET max_retries = 0 WHERE id = ${pipeline.firstStepId}`;
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "Route this existing work through a pipeline.",
+    });
+
+    await releaseTask(sql, started.taskId, 60, "Pipeline step runtime exceeded configured max runtime.");
+
+    const [run] = await sql<{ status: string; supervisor_handoff: string | null }[]>`
+      SELECT status, supervisor_handoff FROM pipeline_runs WHERE id = ${started.runId}
+    `;
+    const [task] = await sql<{ status: string; retry_count: number; failure_reason: string | null }[]>`
+      SELECT status, retry_count, failure_reason FROM tasks WHERE id = ${started.taskId}
+    `;
+
+    expect(run.status).toBe("failed");
+    expect(run.supervisor_handoff).toContain("runtime exceeded");
+    expect(task.status).toBe("failed");
+    expect(task.retry_count).toBe(0);
+  });
+
+  it("does not advance a pipeline task twice when completion is retried", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "Route this existing work through a pipeline.",
+    });
+
+    await completeTask(sql, started.taskId, `summary: First completion.
+verification: checked.`);
+    await completeTask(sql, started.taskId, `summary: Duplicate completion.
+verification: checked.`);
+
+    const stepRuns = await sql<{ step_id: string; status: string; result_summary: string | null }[]>`
+      SELECT step_id, status, result_summary
+      FROM pipeline_step_runs
+      WHERE run_id = ${started.runId}
+      ORDER BY created_at ASC
+    `;
+
+    expect(stepRuns).toHaveLength(2);
+    expect(stepRuns[0]).toMatchObject({ step_id: pipeline.firstStepId, status: "complete", result_summary: `summary: First completion.
+verification: checked.` });
+    expect(stepRuns[1]).toMatchObject({ step_id: pipeline.secondStepId, status: "pending" });
   });
 });

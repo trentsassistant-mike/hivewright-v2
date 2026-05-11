@@ -207,6 +207,7 @@ export async function loadModelRoutingView(
         model: model.model,
         enabled: model.hiveModelEnabled && model.routingEnabled,
         status: model.status,
+        probeFreshness: model.probeFreshness === "unknown" ? undefined : model.probeFreshness,
         qualityScore: model.qualityScore ?? undefined,
         costScore: model.costScore ?? undefined,
         capabilityScores: model.capabilityScores,

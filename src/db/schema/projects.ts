@@ -7,7 +7,7 @@ export const projects = pgTable("projects", {
   slug: varchar("slug", { length: 100 }).notNull(),
   name: varchar("name", { length: 255 }).notNull(),
   workspacePath: varchar("workspace_path", { length: 500 }),
-  gitRepo: boolean("git_repo").default(true).notNull(),
+  gitRepo: boolean("git_repo").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [

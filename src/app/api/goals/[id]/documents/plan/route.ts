@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/app/api/_lib/db";
-import { requireApiUser } from "@/app/api/_lib/auth";
+import { isInternalServiceAccountUser, requireApiUser } from "@/app/api/_lib/auth";
 import { canAccessHive } from "@/auth/users";
 import { getGoalPlan, upsertGoalPlan } from "@/goals/goal-documents";
+import {
+  hasOutcomeClassificationInput,
+  parseOutcomeClassificationRecord,
+  recordGoalOutcomeClassification,
+} from "@/goals/outcome-records";
 
 // Sanity cap on plan body size. The `body` column is text (unbounded), but
 // supervisors shouldn't be PUTing megabyte-scale plans — if they need more,
@@ -47,7 +52,8 @@ export async function GET(
 // caller overwrite the plan of any goal and spoof `createdBy`. This mirrors
 // the already-proven seam in `POST /api/goals/[id]/complete`:
 //   1. `requireApiUser()` resolves the caller identity.
-//   2. System owners pass directly (manual plan edits via the dashboard).
+//   2. Human system owners pass directly (manual plan edits via the dashboard);
+//      internal service-account callers do not.
 //   3. Non-owners must send `X-Supervisor-Session` equal to `goals.session_id`
 //      — the dispatcher-assigned workspace path for this goal. A missing or
 //      mismatched header is 403.
@@ -65,6 +71,12 @@ export async function PUT(
     title?: string;
     body?: string;
     createdBy?: string;
+    outcome_classification?: unknown;
+    classification?: unknown;
+    classification_rationale?: unknown;
+    outcome_classification_rationale?: unknown;
+    applicable_references?: unknown;
+    references?: unknown;
   };
   if (!body.title || !body.body) {
     return NextResponse.json(
@@ -78,6 +90,15 @@ export async function PUT(
       { status: 413 },
     );
   }
+  const classification = hasOutcomeClassificationInput(body)
+    ? parseOutcomeClassificationRecord(body, "goal-supervisor")
+    : null;
+  if (classification && !classification.ok) {
+    return NextResponse.json(
+      { error: classification.error },
+      { status: 400 },
+    );
+  }
 
   // Verify the goal exists before attempting to upsert — otherwise the FK
   // constraint on goal_documents.goal_id surfaces as a 500 from Postgres.
@@ -88,7 +109,9 @@ export async function PUT(
     return NextResponse.json({ error: "goal not found" }, { status: 404 });
   }
 
-  if (!user.isSystemOwner) {
+  const requiresSupervisorProof =
+    !user.isSystemOwner || isInternalServiceAccountUser(user);
+  if (requiresSupervisorProof) {
     const callerSession = request.headers.get("x-supervisor-session")?.trim() ?? "";
     if (!callerSession || callerSession !== goal.session_id) {
       return NextResponse.json(
@@ -98,11 +121,17 @@ export async function PUT(
     }
   }
 
-  const defaultCreatedBy = user.isSystemOwner ? "owner" : "goal-supervisor";
+  const defaultCreatedBy = requiresSupervisorProof ? "goal-supervisor" : "owner";
   const plan = await upsertGoalPlan(sql, id, {
     title: body.title,
     body: body.body,
     createdBy: body.createdBy ?? defaultCreatedBy,
   });
+  if (classification?.ok) {
+    await recordGoalOutcomeClassification(sql, id, {
+      ...classification.record,
+      classifiedBy: defaultCreatedBy,
+    });
+  }
   return NextResponse.json(plan);
 }

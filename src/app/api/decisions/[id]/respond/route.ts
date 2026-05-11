@@ -7,6 +7,7 @@ import { mirrorOwnerDecisionCommentToGoalComment } from "@/decisions/owner-comme
 import { decisionEventForResponse, recordDecisionAuditEvent } from "../../_audit";
 import { canAccessHive } from "@/auth/users";
 import { createOrUpdateSkillCandidateFromSignal } from "@/skills/self-creation";
+import { applyApprovedLearningGateFollowup, LEARNING_GATE_FOLLOWUP_DECISION_KIND } from "@/goals/learning-gate-approval";
 
 const DIRECT_TASK_QA_CAP_ACTIONS = [
   "retry_with_different_role",
@@ -44,6 +45,7 @@ type DecisionRowForModelProposal = {
   recommendation: string | null;
   options: unknown;
   kind: string;
+  route_metadata: unknown;
   is_qa_fixture: boolean;
 };
 
@@ -455,8 +457,10 @@ export async function POST(
     }
     let response = rawResponse;
 
-    const [decisionForAuth] = await sql<{ hive_id: string; kind: string; options: unknown; is_qa_fixture: boolean }[]>`
-      SELECT hive_id, kind, options, is_qa_fixture FROM decisions WHERE id = ${id}
+    const [decisionForAuth] = await sql<
+      { hive_id: string; kind: string; options: unknown; status: string; is_qa_fixture: boolean }[]
+    >`
+      SELECT hive_id, kind, options, status, is_qa_fixture FROM decisions WHERE id = ${id}
     `;
     if (!decisionForAuth) {
       return jsonError("Decision not found", 404);
@@ -507,7 +511,15 @@ export async function POST(
         ? `${response}: ${normalisedComment}`
         : response;
 
+    if (response !== "discussed" && decisionForAuth.status === "resolved") {
+      return jsonError(
+        "Decision is already resolved; create a new decision or discussion comment instead of changing the recorded response.",
+        409,
+      );
+    }
+
     let rows;
+    let learningGateApproval = null;
     if (response === "discussed") {
       // Insert discussion message — do NOT resolve the decision
       const [message] = await sql<{ id: string }[]>`
@@ -522,11 +534,43 @@ export async function POST(
             selected_option_key = ${selectedOption?.key ?? null},
             selected_option_label = ${optionLabel}
         WHERE id = ${id}
-        RETURNING id, hive_id, goal_id, title, context, recommendation, options,
+        RETURNING id, hive_id, goal_id, title, context, recommendation, options, route_metadata,
                   priority, status, kind, owner_response,
                   selected_option_key, selected_option_label, created_at, resolved_at,
                   task_id, is_qa_fixture
       `;
+    } else if (response === "approved" && decisionForAuth.kind === LEARNING_GATE_FOLLOWUP_DECISION_KIND) {
+      const txResult = await sql.begin(async (tx) => {
+        const updatedRows = await tx`
+          UPDATE decisions
+          SET
+            status = 'resolved',
+            owner_response = ${ownerResponse},
+            selected_option_key = ${selectedOption?.key ?? null},
+            selected_option_label = ${optionLabel},
+            resolved_at = NOW(),
+            resolved_by = ${user.id}
+          WHERE id = ${id}
+            AND status <> 'resolved'
+          RETURNING id, hive_id, goal_id, title, context, recommendation, options, route_metadata,
+                    priority, status, kind, owner_response,
+                    selected_option_key, selected_option_label, created_at, resolved_at,
+                    task_id, is_qa_fixture
+        `;
+        if (updatedRows.length === 0) {
+          return { rows: updatedRows, learningGateApproval: null };
+        }
+
+        return {
+          rows: updatedRows,
+          learningGateApproval: await applyApprovedLearningGateFollowup(
+            tx,
+            updatedRows[0] as DecisionRowForModelProposal,
+          ),
+        };
+      });
+      rows = txResult.rows;
+      learningGateApproval = txResult.learningGateApproval;
     } else {
       rows = await sql`
         UPDATE decisions
@@ -538,12 +582,28 @@ export async function POST(
           resolved_at = NOW(),
           resolved_by = ${user.id}
         WHERE id = ${id}
-        RETURNING id, hive_id, goal_id, title, context, recommendation, options,
+          AND status <> 'resolved'
+        RETURNING id, hive_id, goal_id, title, context, recommendation, options, route_metadata,
                   priority, status, kind, owner_response,
                   selected_option_key, selected_option_label, created_at, resolved_at,
                   task_id, is_qa_fixture
       `;
+    }
 
+    if (rows.length === 0) {
+      const [current] = await sql<{ status: string }[]>`
+        SELECT status FROM decisions WHERE id = ${id}
+      `;
+      if (current?.status === "resolved") {
+        return jsonError(
+          "Decision is already resolved; create a new decision or discussion comment instead of changing the recorded response.",
+          409,
+        );
+      }
+      return jsonError("Decision not found", 404);
+    }
+
+    if (response !== "discussed") {
       // If this decision was spawned by an escalated insight, propagate the
       // owner's response back to the insight so it doesn't stay 'escalated'
       // forever after the decision is resolved here. The mapping mirrors the
@@ -584,11 +644,6 @@ export async function POST(
           `;
         }
       }
-
-    }
-
-    if (rows.length === 0) {
-      return jsonError("Decision not found", 404);
     }
 
     const decisionRow = rows[0] as DecisionRowForModelProposal;
@@ -604,6 +659,9 @@ export async function POST(
     const queuedTaskId = response === "approved"
       ? await queueModelRegistryPatchTaskIfNeeded(rows[0] as DecisionRowForModelProposal)
       : null;
+    learningGateApproval = response === "approved" && !learningGateApproval
+      ? await applyApprovedLearningGateFollowup(sql, rows[0] as DecisionRowForModelProposal)
+      : learningGateApproval;
 
     const r = rows[0] as {
       id: string;
@@ -615,6 +673,7 @@ export async function POST(
       recommendation: string | null;
       options: unknown;
       kind: string;
+      route_metadata: unknown;
       priority: string;
       status: string;
       owner_response: string | null;
@@ -638,6 +697,7 @@ export async function POST(
         commentProvided: Boolean(normalisedComment),
         ratingProvided: normalisedRating !== null,
         queuedTaskId,
+        learningGateApproval,
       },
     });
 
@@ -651,6 +711,7 @@ export async function POST(
       recommendation: r.recommendation,
       options: r.options,
       kind: r.kind,
+      routeMetadata: r.route_metadata,
       priority: r.priority,
       status: r.status,
       ownerResponse: r.owner_response,
@@ -659,6 +720,7 @@ export async function POST(
       createdAt: r.created_at,
       resolvedAt: r.resolved_at,
       queuedTaskId,
+      learningGateApproval,
     });
   } catch {
     return jsonError("Failed to respond to decision", 500);

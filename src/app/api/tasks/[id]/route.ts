@@ -3,6 +3,7 @@ import { jsonOk, jsonError } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
 import { canAccessHive } from "@/auth/users";
 import { readLatestCodexEmptyOutputDiagnostic } from "@/runtime-diagnostics/codex-empty-output";
+import { readLatestTaskContextProvenance } from "@/provenance/task-context";
 
 type TaskRow = {
   id: string;
@@ -153,6 +154,7 @@ export async function GET(
     }
 
     const diagnostic = await readLatestCodexEmptyOutputDiagnostic(sql, id);
+    const provenance = await readLatestTaskContextProvenance(sql, id);
 
     const workProducts = await sql`
       SELECT id, content, summary, artifact_kind, mime_type, width, height,
@@ -166,6 +168,7 @@ export async function GET(
 
     return jsonOk({
       ...task,
+      provenance,
       runtimeDiagnostics: {
         codexEmptyOutput: diagnostic,
       },

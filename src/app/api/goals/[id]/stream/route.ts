@@ -71,9 +71,9 @@ import { sql } from "../../../_lib/db";
 import { requireApiUser } from "../../../_lib/auth";
 import { jsonError } from "../../../_lib/responses";
 import { canAccessHive } from "@/auth/users";
-import { requireEnv } from "@/lib/required-env";
 
-const DATABASE_URL = requireEnv("DATABASE_URL");
+const DATABASE_URL =
+  process.env.DATABASE_URL || "postgresql://hivewright@localhost:5432/hivewrightv2";
 
 interface GoalLiveChunk {
   goalId: string;

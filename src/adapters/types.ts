@@ -8,11 +8,34 @@ export interface RoleContext {
   department: string | null;
 }
 
+export type ContextSourceClass =
+  | "role_memory"
+  | "hive_memory"
+  | "insight"
+  | "work_product"
+  | "task"
+  | "goal";
+
+export interface ContextProvenanceEntry {
+  sourceClass: ContextSourceClass;
+  reference: string;
+  sourceId: string;
+  sourceTaskId?: string | null;
+  category?: string | null;
+}
+
+export interface ContextProvenance {
+  status: "available" | "none" | "unavailable";
+  entries: ContextProvenanceEntry[];
+  disclaimer: string;
+}
+
 export interface MemoryContext {
   roleMemory: { content: string; confidence: number; updatedAt: Date }[];
   hiveMemory: { content: string; category: string; confidence: number }[];
   insights: { content: string; connectionType: string; confidence: number }[];
   capacity: string;
+  provenance?: ContextProvenance;
 }
 
 export interface SessionContext {
@@ -23,6 +46,12 @@ export interface SessionContext {
   standingInstructions: string[];
   goalContext: string | null;
   projectWorkspace: string | null;
+  /**
+   * True only when the task is explicitly associated with a project whose
+   * projects.git_repo flag is true. Hive workspaces and repo-looking project
+   * paths must not implicitly opt into git worktree provisioning.
+   */
+  gitBackedProject?: boolean;
   /** Canonical workspace resolved from hive/project before any per-task isolation. */
   baseProjectWorkspace?: string | null;
   /** Dispatcher-owned per-task workspace metadata. */

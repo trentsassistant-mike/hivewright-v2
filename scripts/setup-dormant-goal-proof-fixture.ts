@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { resolveRuntimePath } from "../src/runtime/paths";
 import { spawnSync } from "node:child_process";
 import postgres from "postgres";
 import {
@@ -9,9 +10,9 @@ import {
   inspectDormantGoalProofPreflight,
 } from "@/initiative-engine/proof-fixture";
 
-const TEST_DB_NAME_PREFIX = "hivewright_test";
-const DEFAULT_TEST_DB_URL = `postgresql://hivewright:hivewright@localhost:5432/${TEST_DB_NAME_PREFIX}`;
-const DEFAULT_ADMIN_URL = "postgresql://hivewright:hivewright@localhost:5432/postgres";
+const TEST_DB_NAME_PREFIX = "hivewrightv2_test";
+const DEFAULT_TEST_DB_URL = `postgresql://hivewright:placeholder@localhost:5432/${TEST_DB_NAME_PREFIX}`;
+const DEFAULT_ADMIN_URL = "postgresql://hivewright:placeholder@localhost:5432/postgres";
 const OUT_FLAG = "--out";
 const KEEP_DB_FLAG = "--keep-db";
 const VERIFY_PROOF_FLAG = "--verify-proof";
@@ -122,10 +123,10 @@ async function main() {
 
     const resolvedOutputPath =
       outputPath ??
-      path.join(
+      resolveRuntimePath([
         "artifacts",
         `dormant-goal-proof-fixture-${new Date().toISOString().slice(0, 10)}.json`,
-      );
+      ]);
     const absoluteOutputPath = path.resolve(process.cwd(), resolvedOutputPath);
     await mkdir(path.dirname(absoluteOutputPath), { recursive: true });
 

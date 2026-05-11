@@ -4,9 +4,8 @@ import {
   cleanupOperationsMapParkedQaFixture,
   createOperationsMapParkedQaFixture,
 } from "../src/quality/operations-map-qa-fixture";
-import { requireEnv } from "../src/lib/required-env";
 
-const DATABASE_URL = requireEnv("DATABASE_URL");
+const DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://hivewright@localhost:5432/hivewrightv2";
 
 async function main() {
   const sql = postgres(DATABASE_URL, { max: 1 });

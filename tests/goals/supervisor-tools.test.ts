@@ -62,6 +62,10 @@ describe("SUPERVISOR_TOOLS", () => {
     expect(names).toContain("create_schedule");
     expect(names).toContain("mark_goal_achieved");
     expect(names).toContain("get_role_library");
+    expect(names).toContain("list_pipeline_templates");
+    expect(names).toContain("start_pipeline_run");
+    expect(names).toContain("propose_pipeline_template");
+    expect(names).toContain("record_outcome_classification");
   });
 
   it("guides route-choice decisions to include existing credential and subscription paths", () => {
@@ -70,9 +74,190 @@ describe("SUPERVISOR_TOOLS", () => {
     expect(createDecision?.description).toContain("Codex auth");
     expect(createDecision?.parameters.options.description).toContain("reuse-existing");
   });
+
+  it("describes pipelines as process-bound or owner-approved business procedures", () => {
+    const listPipelines = SUPERVISOR_TOOLS.find((tool) => tool.name === "list_pipeline_templates");
+    const startPipeline = SUPERVISOR_TOOLS.find((tool) => tool.name === "start_pipeline_run");
+    const proposePipeline = SUPERVISOR_TOOLS.find((tool) => tool.name === "propose_pipeline_template");
+
+    expect(listPipelines?.description).toMatch(/mandatory|owner-approved|process-bound/i);
+    expect(startPipeline?.description).toMatch(/mandatory|owner-approved|process-bound/i);
+    expect(proposePipeline?.description).toMatch(/draft|owner approval|mandatory/i);
+  });
+
+  it("declares the supported learning gate categories on mark_goal_achieved", () => {
+    const markAchieved = SUPERVISOR_TOOLS.find((tool) => tool.name === "mark_goal_achieved");
+    expect(markAchieved?.parameters.learning_gate.description).toContain("policy_candidate");
+    expect(markAchieved?.parameters.learning_gate.description).toContain("pipeline_candidate");
+    expect(markAchieved?.parameters.learning_gate.description).toContain("nothing");
+  });
+
+  it("tells supervisors not to mark goals achieved without evidence", () => {
+    const markAchieved = SUPERVISOR_TOOLS.find((tool) => tool.name === "mark_goal_achieved");
+    expect(markAchieved?.description).toMatch(/evidence.*required/i);
+    expect(markAchieved?.description).toMatch(/do not mark.*achieved.*without evidence/i);
+    expect(markAchieved?.parameters.evidence).toEqual(expect.objectContaining({
+      type: "array",
+      required: true,
+    }));
+    expect(markAchieved?.parameters.evidence.description).toMatch(/artifact|test|review|screenshot|decision/i);
+  });
 });
 
+async function seedSupervisorPipelineTemplate() {
+  const [template] = await sql<{ id: string }[]>`
+    INSERT INTO pipeline_templates (
+      scope, hive_id, slug, name, department, description,
+      final_output_contract, version, active
+    )
+    VALUES (
+      'hive', ${bizId}, 'supervisor-selectable-pipeline', 'Supervisor Selectable Pipeline', 'content',
+      'Reusable pipeline for supervisor-selected work.',
+      ${sql.json({ requiredFields: ["summary", "verification"] })}, 1, true
+    )
+    RETURNING id
+  `;
+  await sql`
+    INSERT INTO pipeline_steps (
+      template_id, step_order, slug, name, role_slug, duty, output_contract,
+      acceptance_criteria, drift_check
+    )
+    VALUES (
+      ${template.id}, 1, 'draft', 'Draft', 'suptool-role', 'Draft the deliverable.',
+      ${sql.json({ requiredFields: ["summary", "verification"] })},
+      'Draft must satisfy source intent.',
+      ${sql.json({ mode: "source_similarity", threshold: 0.1 })}
+    )
+  `;
+  return template.id;
+}
+
 describe("executeSupervisorTool", () => {
+  it("lets a goal supervisor inspect active pipeline templates before creating normal tasks", async () => {
+    const templateId = await seedSupervisorPipelineTemplate();
+    await sql`
+      INSERT INTO pipeline_templates (scope, hive_id, slug, name, department, final_output_contract, version, active)
+      VALUES ('hive', ${bizId}, 'inactive-supervisor-pipeline', 'Inactive Pipeline', 'content', ${sql.json({ requiredFields: ["summary"] })}, 1, false)
+    `;
+
+    const result = await executeSupervisorTool(sql, goalId, bizId, "list_pipeline_templates", {});
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: templateId, name: "Supervisor Selectable Pipeline", stepCount: 1 }),
+    ]));
+    expect(JSON.stringify(result.data)).not.toContain("Inactive Pipeline");
+  });
+
+  it("starts a selected pipeline as the current goal sprint instead of duplicating normal sprint tasks", async () => {
+    const templateId = await seedSupervisorPipelineTemplate();
+    const [sourceTask] = await sql<{ id: string }[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, status, title, brief, goal_id, sprint_number)
+      VALUES (${bizId}, 'suptool-role', 'goal-supervisor', 'cancelled', 'Source work item', 'Use the reusable pipeline.', ${goalId}, 1)
+      RETURNING id
+    `;
+
+    const result = await executeSupervisorTool(sql, goalId, bizId, "start_pipeline_run", {
+      template_id: templateId,
+      source_task_id: sourceTask.id,
+      source_context: "Source work item\n\nUse the reusable pipeline.",
+      sprint_number: 2,
+      selection_rationale: "Template matches this repeatable content workflow.",
+      confidence: 0.82,
+    });
+
+    expect(result.success).toBe(true);
+    const taskId = result.data.taskId as string;
+    const [task] = await sql<{ created_by: string; goal_id: string | null; sprint_number: number | null; parent_task_id: string | null }[]>`
+      SELECT created_by, goal_id, sprint_number, parent_task_id FROM tasks WHERE id = ${taskId}
+    `;
+    const [run] = await sql<{ goal_id: string | null; source_task_id: string | null; supervisor_handoff: string | null }[]>`
+      SELECT goal_id, source_task_id, supervisor_handoff FROM pipeline_runs WHERE id = ${result.data.runId}
+    `;
+
+    expect(task).toEqual({ created_by: "pipeline", goal_id: goalId, sprint_number: 2, parent_task_id: sourceTask.id });
+    expect(run.goal_id).toBe(goalId);
+    expect(run.source_task_id).toBe(sourceTask.id);
+    expect(run.supervisor_handoff).toContain("Template matches this repeatable content workflow");
+  });
+
+  it("persists process-bound outcome classification with rationale and applicable references", async () => {
+    const templateId = await seedSupervisorPipelineTemplate();
+
+    const result = await executeSupervisorTool(sql, goalId, bizId, "record_outcome_classification", {
+      classification: "process-bound",
+      rationale: "The owner-approved content pipeline governs this repeatable publication workflow.",
+      references: [
+        {
+          type: "pipeline",
+          id: templateId,
+          slug: "supervisor-selectable-pipeline",
+          title: "Supervisor Selectable Pipeline",
+        },
+        {
+          type: "policy",
+          slug: "owner-approval-before-publishing",
+          title: "Owner approval before public publishing",
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+
+    const [goal] = await sql<{
+      outcome_classification: string | null;
+      outcome_classification_rationale: string | null;
+      outcome_process_references: unknown;
+      outcome_classified_by: string | null;
+      outcome_classified_at: Date | null;
+    }[]>`
+      SELECT outcome_classification, outcome_classification_rationale,
+             outcome_process_references, outcome_classified_by, outcome_classified_at
+      FROM goals
+      WHERE id = ${goalId}
+    `;
+    expect(goal.outcome_classification).toBe("process-bound");
+    expect(goal.outcome_classification_rationale).toContain("owner-approved content pipeline");
+    expect(goal.outcome_process_references).toEqual([
+      expect.objectContaining({ type: "pipeline", id: templateId, slug: "supervisor-selectable-pipeline" }),
+      expect.objectContaining({ type: "policy", slug: "owner-approval-before-publishing" }),
+    ]);
+    expect(goal.outcome_classified_by).toBe("goal-supervisor");
+    expect(goal.outcome_classified_at).toBeInstanceOf(Date);
+  });
+
+  it("rejects malformed outcome classifications without mutating the goal", async () => {
+    const result = await executeSupervisorTool(sql, goalId, bizId, "record_outcome_classification", {
+      classification: "workflow-ish",
+      rationale: "Not a supported classification.",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("outcome-led");
+
+    const [goal] = await sql<{ outcome_classification: string | null }[]>`
+      SELECT outcome_classification FROM goals WHERE id = ${goalId}
+    `;
+    expect(goal.outcome_classification).toBeNull();
+  });
+
+  it("creates a governed sub-goal when no existing pipeline fits", async () => {
+    const result = await executeSupervisorTool(sql, goalId, bizId, "propose_pipeline_template", {
+      title: "Create reusable customer-story publishing pipeline",
+      need: "No existing template handles customer-story publishing with design review.",
+      proposed_steps: ["brief", "draft", "design-review", "publish-handoff"],
+      evidence: "Supervisor compared active templates and found no suitable match.",
+    });
+
+    expect(result.success).toBe(true);
+    const [subGoal] = await sql<{ title: string; description: string | null; parent_id: string | null }[]>`
+      SELECT title, description, parent_id FROM goals WHERE id = ${result.data.goalId}
+    `;
+    expect(subGoal.parent_id).toBe(goalId);
+    expect(subGoal.title).toContain("customer-story publishing pipeline");
+    expect(subGoal.description).toContain("proposed_steps");
+  });
+
   it("creates a task via create_task", async () => {
     const result = await executeSupervisorTool(sql, goalId, bizId, "create_task", {
       assigned_to: "suptool-role",
@@ -89,6 +274,36 @@ describe("executeSupervisorTool", () => {
     expect(tasks[0].goal_id).toBe(goalId);
     expect(tasks[0].sprint_number).toBe(1);
     expect(tasks[0].created_by).toBe("goal-supervisor");
+  });
+
+  it("rejects direct execution tasks for content work when the content-publishing pipeline is available", async () => {
+    await sql`
+      INSERT INTO pipeline_templates (
+        scope, hive_id, slug, name, department, description,
+        final_output_contract, version, active
+      )
+      VALUES (
+        'global', NULL, 'content-publishing', 'Fast Content Publishing Pipeline', 'content',
+        'Moves content from brief through draft, edit, approval, and publishing handoff.',
+        ${sql.json({ requiredFields: ["title", "body", "verification"] })}, 1, true
+      )
+    `;
+
+    const result = await executeSupervisorTool(sql, goalId, bizId, "create_task", {
+      assigned_to: "content-writer",
+      title: "Draft HiveWright landing page copy package",
+      brief: "Write landing page copy with hero, CTA, FAQ, metadata, and publish handoff notes.",
+      acceptance_criteria: "Final copy package includes title, body, CTA, channel notes, and verification.",
+      sprint_number: 2,
+      task_kind: "implementation",
+      qa_required: false,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("content-publishing");
+    expect(result.message).toContain("start_pipeline_run");
+    const tasks = await sql`SELECT id FROM tasks WHERE goal_id = ${goalId} AND title = 'Draft HiveWright landing page copy package'`;
+    expect(tasks.length).toBe(0);
   });
 
   it("blocks goal-supervisor replacement tasks when the source task family budget is exhausted", async () => {
@@ -354,6 +569,19 @@ describe("executeSupervisorTool", () => {
   it("marks goal achieved via mark_goal_achieved (clears session, writes canonical memory)", async () => {
     const result = await executeSupervisorTool(sql, goalId, bizId, "mark_goal_achieved", {
       summary: "suptool: Everything is done!",
+      evidence: [
+        {
+          type: "test",
+          description: "Focused supervisor completion test passed.",
+          reference: "vitest tests/goals/supervisor-tools.test.ts",
+          verified: true,
+        },
+      ],
+      learning_gate: {
+        category: "template",
+        rationale: "The final plan structure is reusable for similar launch goals.",
+        action: "Draft a reusable launch-plan template after owner review.",
+      },
     });
     expect(result.success).toBe(true);
 
@@ -372,6 +600,144 @@ describe("executeSupervisorTool", () => {
     `;
     expect(mem.length).toBeGreaterThanOrEqual(1);
     expect(mem[0].content).toContain('Goal "suptool-goal" achieved');
+
+    const [completion] = await sql<{ learning_gate: unknown }[]>`
+      SELECT learning_gate FROM goal_completions WHERE goal_id = ${goalId}
+    `;
+    expect(completion.learning_gate).toEqual({
+      category: "template",
+      rationale: "The final plan structure is reusable for similar launch goals.",
+      action: "Draft a reusable launch-plan template after owner review.",
+    });
+  });
+
+  it("rejects mark_goal_achieved when evidence is missing or empty", async () => {
+    const missing = await executeSupervisorTool(sql, goalId, bizId, "mark_goal_achieved", {
+      summary: "suptool: summary-only claim",
+      learning_gate: {
+        category: "nothing",
+        rationale: "No reusable learning.",
+      },
+    });
+    expect(missing.success).toBe(false);
+    expect(missing.message).toMatch(/evidence/i);
+
+    const empty = await executeSupervisorTool(sql, goalId, bizId, "mark_goal_achieved", {
+      summary: "suptool: empty evidence claim",
+      evidence: [],
+      learning_gate: {
+        category: "nothing",
+        rationale: "No reusable learning.",
+      },
+    });
+    expect(empty.success).toBe(false);
+    expect(empty.message).toMatch(/evidence/i);
+
+    const whitespaceOnly = await executeSupervisorTool(sql, goalId, bizId, "mark_goal_achieved", {
+      summary: "suptool: invalid evidence claim",
+      evidence: [
+        {
+          type: "test",
+          description: "   ",
+          reference: "   ",
+        },
+      ],
+      learning_gate: {
+        category: "nothing",
+        rationale: "No reusable learning.",
+      },
+    });
+    expect(whitespaceOnly.success).toBe(false);
+    expect(whitespaceOnly.message).toMatch(/evidence/i);
+
+    const [goal] = await sql`SELECT status, session_id FROM goals WHERE id = ${goalId}`;
+    expect(goal.status).toBe("active");
+    expect(goal.session_id).toBe("gs-suptool-test-fixture");
+    const completions = await sql`SELECT id FROM goal_completions WHERE goal_id = ${goalId}`;
+    expect(completions.length).toBe(0);
+  });
+
+  it("persists mark_goal_achieved evidence bundle on the completion row", async () => {
+    const evidence = [
+      {
+        type: "artifact",
+        description: "The launch page implementation exists in the project workspace.",
+        reference: "apps/web/app/page.tsx",
+        verified: true,
+      },
+      {
+        type: "review",
+        description: "QA approved the completion against the goal plan.",
+        value: "PASS",
+      },
+    ];
+
+    const result = await executeSupervisorTool(sql, goalId, bizId, "mark_goal_achieved", {
+      summary: "suptool: completed with proof",
+      evidence,
+      learning_gate: {
+        category: "nothing",
+        rationale: "No reusable learning.",
+      },
+    });
+    expect(result.success).toBe(true);
+
+    const [completion] = await sql<{ evidence: unknown }[]>`
+      SELECT evidence FROM goal_completions WHERE goal_id = ${goalId}
+    `;
+    expect(completion.evidence).toEqual({ bundle: evidence });
+  });
+
+  it("does not duplicate completion records, memory, or follow-ups when mark_goal_achieved is repeated", async () => {
+    const args = {
+      summary: "suptool duplicate: completed with proof",
+      evidence: [
+        {
+          type: "artifact",
+          description: "The deliverable exists in the workspace.",
+          reference: "docs/suptool-deliverable.md",
+          verified: true,
+        },
+      ],
+      learning_gate: {
+        category: "template",
+        rationale: "The completion pattern is reusable after owner review.",
+        action: "Create one reusable supervisor checklist.",
+      },
+    };
+
+    const first = await executeSupervisorTool(sql, goalId, bizId, "mark_goal_achieved", args);
+    expect(first.success).toBe(true);
+
+    const second = await executeSupervisorTool(sql, goalId, bizId, "mark_goal_achieved", {
+      ...args,
+      summary: "suptool duplicate: repeated call should not duplicate",
+    });
+    expect(second.success).toBe(true);
+
+    const [goal] = await sql<{ status: string }[]>`
+      SELECT status FROM goals WHERE id = ${goalId}
+    `;
+    expect(goal.status).toBe("achieved");
+
+    const completions = await sql`
+      SELECT id FROM goal_completions WHERE goal_id = ${goalId}
+    `;
+    expect(completions).toHaveLength(1);
+
+    const memories = await sql`
+      SELECT id FROM hive_memory
+      WHERE hive_id = ${bizId}
+        AND content LIKE '%suptool duplicate:%'
+    `;
+    expect(memories).toHaveLength(1);
+
+    const followups = await sql`
+      SELECT id FROM decisions
+      WHERE hive_id = ${bizId}
+        AND kind = 'learning_gate_followup'
+    `;
+    expect(followups).toHaveLength(1);
   });
 
   it("rejects mark_goal_achieved with missing or empty summary", async () => {
@@ -411,6 +777,8 @@ describe("executeSupervisorTool — create_goal_plan", () => {
     const result = await executeSupervisorTool(sql, goalId, bizId, "create_goal_plan", {
       title: "suptool-plan",
       body: "# Goal Summary\nDo the work.",
+      outcome_classification: "outcome-led",
+      classification_rationale: "No mandatory owner process applies; infer the professional workflow.",
     });
     expect(result.success).toBe(true);
 
@@ -420,6 +788,12 @@ describe("executeSupervisorTool — create_goal_plan", () => {
     expect(plan!.body).toContain("Do the work.");
     expect(plan!.revision).toBe(1);
     expect(plan!.createdBy).toBe("goal-supervisor");
+
+    const [goal] = await sql<{ outcome_classification: string | null; outcome_classification_rationale: string | null }[]>`
+      SELECT outcome_classification, outcome_classification_rationale FROM goals WHERE id = ${goalId}
+    `;
+    expect(goal.outcome_classification).toBe("outcome-led");
+    expect(goal.outcome_classification_rationale).toContain("infer the professional workflow");
   });
 
   it("updates existing plan and bumps revision on second call", async () => {

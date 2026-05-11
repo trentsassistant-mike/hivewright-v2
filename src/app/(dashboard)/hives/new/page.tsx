@@ -140,6 +140,7 @@ interface ProjectEntry {
   name: string;
   slug: string;
   workspacePath: string;
+  gitRepo: boolean;
 }
 
 interface SetupField {
@@ -397,17 +398,17 @@ export default function NewHiveWizard() {
   const addProject = () => {
     setState((prev) => ({
       ...prev,
-      projects: [...prev.projects, { name: "", slug: "", workspacePath: "" }],
+      projects: [...prev.projects, { name: "", slug: "", workspacePath: "", gitRepo: false }],
     }));
   };
 
-  const updateProject = (index: number, field: keyof ProjectEntry, value: string) => {
+  const updateProject = (index: number, field: keyof ProjectEntry, value: string | boolean) => {
     setState((prev) => ({
       ...prev,
       projects: prev.projects.map((project, i) => {
         if (i !== index) return project;
         const updated = { ...project, [field]: value };
-        if (field === "name" && !project.slug) updated.slug = autoSlug(value);
+        if (field === "name" && typeof value === "string" && !project.slug) updated.slug = autoSlug(value);
         return updated;
       }),
     }));
@@ -481,6 +482,7 @@ export default function NewHiveWizard() {
               name: project.name,
               slug: project.slug,
               workspacePath: project.workspacePath || undefined,
+              gitRepo: project.gitRepo,
             })),
           initialGoal: state.initialGoal || undefined,
           operatingPreferences: state.operatingPreferences,
@@ -988,6 +990,18 @@ export default function NewHiveWizard() {
                       className="mt-1 w-full rounded-md border px-3 py-1.5 text-sm dark:bg-zinc-800"
                     />
                     <p className="mt-1 text-xs text-zinc-400">Optional. Leave this blank unless an operator gave you a specific folder to use.</p>
+                    <label className="mt-3 flex items-start gap-2 text-xs text-zinc-500">
+                      <input
+                        type="checkbox"
+                        checked={project.gitRepo}
+                        onChange={(e) => updateProject(index, "gitRepo", e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <span className="font-medium text-zinc-700 dark:text-zinc-200">Git-backed code project</span>
+                        <span className="block">Use only when the folder is already a Git repository. These projects get isolated worktrees and commit/SHA requirements.</span>
+                      </span>
+                    </label>
                   </div>
                 )}
               </div>
@@ -1059,7 +1073,7 @@ export default function NewHiveWizard() {
                 <p className="font-medium mb-1">Projects ({state.projects.filter((project) => project.name && project.slug).length})</p>
                 {state.projects.filter((project) => project.name && project.slug).map((project, index) => (
                   <p key={index} className="text-zinc-500">
-                    {project.name} ({project.slug}){project.workspacePath ? " · advanced folder saved" : ""}
+                    {project.name} ({project.slug}){project.workspacePath ? " · advanced folder saved" : ""}{project.gitRepo ? " · git-backed" : ""}
                   </p>
                 ))}
                 {state.projects.filter((project) => project.name && project.slug).length === 0 && (

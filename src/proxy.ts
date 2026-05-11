@@ -2,6 +2,7 @@ import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
 import { authConfig } from "@/auth.config";
 import { hasValidInternalServiceBearer } from "@/lib/internal-service-auth";
+import { isPublicPage } from "@/navigation/public-pages";
 
 // Edge-safe auth runtime: no DB-backed Credentials provider. The proxy only
 // needs to read the JWT session cookie to gate requests; full sign-in goes
@@ -34,8 +35,8 @@ function hasValidInternalBearer(req: Parameters<Parameters<typeof auth>[0]>[0]):
 export default auth((req) => {
   const { pathname } = req.nextUrl;
 
-  // Public pages.
-  if (pathname.startsWith("/login") || pathname.startsWith("/docs")) {
+  // Public pages. /landing is allowlisted only as a preview/non-public surface.
+  if (isPublicPage(pathname)) {
     return NextResponse.next();
   }
 

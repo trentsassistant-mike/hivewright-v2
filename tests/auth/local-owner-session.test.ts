@@ -60,7 +60,7 @@ afterEach(() => {
 describe("assertLocalOwnerSessionResetAllowed", () => {
   it("requires the explicit enable flag", () => {
     expect(() =>
-      assertLocalOwnerSessionResetAllowed("postgresql://hivewright:hivewright@localhost:5432/hivewright"),
+      assertLocalOwnerSessionResetAllowed("postgresql://hivewright@localhost:5432/hivewrightv2"),
     ).toThrow(LOCAL_OWNER_RESET_FLAG);
   });
 
@@ -68,21 +68,21 @@ describe("assertLocalOwnerSessionResetAllowed", () => {
     mutableEnv[LOCAL_OWNER_RESET_FLAG] = "1";
     mutableEnv.NODE_ENV = "production";
     expect(() =>
-      assertLocalOwnerSessionResetAllowed("postgresql://hivewright:hivewright@localhost:5432/hivewright"),
+      assertLocalOwnerSessionResetAllowed("postgresql://hivewright@localhost:5432/hivewrightv2"),
     ).toThrow(/production/i);
   });
 
   it("rejects non-loopback database hosts", () => {
     mutableEnv[LOCAL_OWNER_RESET_FLAG] = "1";
     expect(() =>
-      assertLocalOwnerSessionResetAllowed("postgresql://hivewright@db.internal:5432/hivewright"),
+      assertLocalOwnerSessionResetAllowed("postgresql://hivewright@db.internal:5432/hivewrightv2"),
     ).toThrow(/loopback/i);
   });
 
   it("accepts loopback database hosts when explicitly enabled", () => {
     mutableEnv[LOCAL_OWNER_RESET_FLAG] = "1";
     expect(() =>
-      assertLocalOwnerSessionResetAllowed("postgresql://hivewright@127.0.0.1:5432/hivewright"),
+      assertLocalOwnerSessionResetAllowed("postgresql://hivewright@127.0.0.1:5432/hivewrightv2"),
     ).not.toThrow();
   });
 });

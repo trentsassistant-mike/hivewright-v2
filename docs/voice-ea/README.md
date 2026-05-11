@@ -106,7 +106,7 @@ setup; restart isn't required for config changes.
 
 **Voice EA connector** (slug `voice-ea`) — install once per hive:
 - `voiceServicesUrl` — base URL of the GPU-hosted voice services
-  (e.g. `http://<gpu-host>:8790`). Hostname:port; no trailing slash.
+  (e.g. `http://100.87.99.7:8790`). Hostname:port; no trailing slash.
 - `maxMonthlyLlmCents` (optional) — monthly LLM-cost cap in cents.
   Blank or `0` = no cap. When set, the EA verbally warns at 80%,
   downgrades to Sonnet at 100%, and hangs up at 120%.
@@ -128,7 +128,7 @@ The connector has a **Test connection** action that probes
 After editing `.env` (only):
 
 ```bash
-systemctl --user restart hivewright-dashboard
+systemctl --user restart hivewrightv2-dashboard
 ./scripts/deferred-restart-dispatcher.sh 10
 ```
 
@@ -139,10 +139,10 @@ non-trivial change.
 
 ### Prerequisites
 
-- `systemctl --user status hivewright-dashboard` is `active`.
-- `systemctl --user status hivewright-dispatcher` is `active`.
+- `systemctl --user status hivewrightv2-dashboard` is `active`.
+- `systemctl --user status hivewrightv2-dispatcher` is `active`.
 - Dispatcher logs show `[dispatcher] Voice WS server listening on port
-  8791.` — `journalctl --user -u hivewright-dispatcher -n 50 | grep
+  8791.` — `journalctl --user -u hivewrightv2-dispatcher -n 50 | grep
   -i voice`.
 - `curl http://<gpu-ip>:8790/health` returns 200 from the dashboard
   host.
@@ -293,5 +293,5 @@ LAN interface — open it.
   in the browser), `src/lib/voice-services-url.ts` (per-hive connector
   loader with env fallback), `src/lib/voice-session-token.ts` (HMAC
   handshake tokens), `voice_sessions.transport` column.
-- Internal implementation notes for this migration are intentionally not part
-  of the public repository boundary.
+- The plan that drove this is at
+  `docs/superpowers/plans/2026-05-07-voice-ea-webrtc-twilio-removal.md`.

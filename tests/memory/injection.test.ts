@@ -40,6 +40,45 @@ describe("queryRelevantMemory", () => {
     expect(result.hiveMemory[0].content).toContain("p4-inj-NewBook API");
     expect(result.insights.length).toBeGreaterThanOrEqual(1);
     expect(result.capacity).toMatch(/\d+\/200/);
+    expect(result.provenance?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceClass: "role_memory",
+          reference: expect.stringMatching(/^role_memory:/),
+        }),
+        expect.objectContaining({
+          sourceClass: "hive_memory",
+          reference: expect.stringMatching(/^hive_memory:/),
+          category: "operations",
+        }),
+        expect.objectContaining({
+          sourceClass: "insight",
+          reference: expect.stringMatching(/^insights:/),
+        }),
+      ]),
+    );
+    expect(JSON.stringify(result.provenance)).not.toContain("p4-inj-API rate limit");
+    expect(JSON.stringify(result.provenance)).not.toContain("p4-inj-NewBook API");
+    expect(result.provenance?.disclaimer).toContain("not model-internal reasoning");
+  });
+
+  it("returns an explicit empty provenance state when no memory or context is retrieved", async () => {
+    const result = await queryRelevantMemory(sql, {
+      roleSlug: "dev-agent",
+      hiveId: bizId,
+      department: null,
+      taskBrief: "No related memory",
+      pgvectorEnabled: false,
+    });
+
+    expect(result.roleMemory).toEqual([]);
+    expect(result.hiveMemory).toEqual([]);
+    expect(result.insights).toEqual([]);
+    expect(result.provenance).toEqual({
+      status: "none",
+      entries: [],
+      disclaimer: expect.stringContaining("not model-internal reasoning"),
+    });
   });
 
   it("excludes superseded memories", async () => {

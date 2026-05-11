@@ -59,7 +59,7 @@ function task(overrides: Partial<ClaimedTask> = {}): ClaimedTask {
   };
 }
 
-function context(taskRow: ClaimedTask, workspace: string | null): SessionContext {
+function context(taskRow: ClaimedTask, workspace: string | null, gitBackedProject = false): SessionContext {
   return {
     task: taskRow,
     roleTemplate: {
@@ -79,6 +79,7 @@ function context(taskRow: ClaimedTask, workspace: string | null): SessionContext
     standingInstructions: [],
     goalContext: null,
     projectWorkspace: workspace,
+    gitBackedProject,
     baseProjectWorkspace: workspace,
     hiveWorkspacePath: workspace,
     model: "anthropic/claude-sonnet-4-6",
@@ -131,8 +132,8 @@ describe("provisionTaskWorkspace", () => {
     await insertTask(taskA);
     await insertTask(taskB);
 
-    const ctxA = context(taskA, repo);
-    const ctxB = context(taskB, repo);
+    const ctxA = context(taskA, repo, true);
+    const ctxB = context(taskB, repo, true);
     const resultA = await provisionTaskWorkspace(sql, ctxA);
     const resultB = await provisionTaskWorkspace(sql, ctxB);
 
@@ -152,7 +153,7 @@ describe("provisionTaskWorkspace", () => {
     const repo = createTempRepo();
     const taskRow = task({ id: "30000000-0000-0000-0000-000000000003" });
     await insertTask(taskRow);
-    const ctx = context(taskRow, repo);
+    const ctx = context(taskRow, repo, true);
 
     const result = await provisionTaskWorkspace(sql, ctx);
 
@@ -189,10 +190,10 @@ describe("provisionTaskWorkspace", () => {
     await insertTask(parent);
     await insertTask(child);
 
-    const parentCtx = context(parent, repo);
+    const parentCtx = context(parent, repo, true);
     const parentResult = await provisionTaskWorkspace(sql, parentCtx);
     const inherited = await inheritTaskWorkspaceFromParent(sql, parent.id, child.id);
-    const childCtx = context(child, repo);
+    const childCtx = context(child, repo, true);
     const childResult = await provisionTaskWorkspace(sql, childCtx);
 
     expect(inherited).toBe(true);
@@ -210,8 +211,8 @@ describe("provisionTaskWorkspace", () => {
     const repo = createTempRepo();
     await sql`UPDATE hives SET workspace_path = NULL WHERE id = ${hiveId}`;
     const [project] = await sql<{ id: string }[]>`
-      INSERT INTO projects (hive_id, slug, name, workspace_path)
-      VALUES (${hiveId}, 'app', 'App', ${repo})
+      INSERT INTO projects (hive_id, slug, name, workspace_path, git_repo)
+      VALUES (${hiveId}, 'app', 'App', ${repo}, true)
       RETURNING id
     `;
     const taskRow = task({
@@ -247,6 +248,57 @@ describe("provisionTaskWorkspace", () => {
     });
   });
 
+  it("does not provision a worktree for a task without a project even when the hive workspace is a git repo", async () => {
+    const repo = createTempRepo();
+    await sql`UPDATE hives SET workspace_path = ${repo} WHERE id = ${hiveId}`;
+    const taskRow = task({ id: "61000000-0000-0000-0000-000000000061", projectId: null });
+    await insertTask(taskRow);
+
+    const ctx = await buildSessionContext(sql, taskRow);
+    const result = await provisionTaskWorkspace(sql, ctx);
+
+    expect(ctx.projectWorkspace).toBe(repo);
+    expect(ctx.gitBackedProject).toBe(false);
+    expect(result.status).toBe("skipped");
+    expect(result.isolationActive).toBe(false);
+    expect(result.reason).toContain("git-backed project");
+    expect(fs.existsSync(taskWorktreePath(repo, taskRow.id))).toBe(false);
+  });
+
+  it("does not provision a worktree for a project with git_repo=false even when its workspace is a git repo", async () => {
+    const repo = createTempRepo();
+    const [project] = await sql<{ id: string }[]>`
+      INSERT INTO projects (hive_id, slug, name, workspace_path, git_repo)
+      VALUES (${hiveId}, 'docs', 'Docs', ${repo}, false)
+      RETURNING id
+    `;
+    const taskRow = task({
+      id: "62000000-0000-0000-0000-000000000062",
+      projectId: project.id,
+    });
+    await sql`
+      INSERT INTO tasks (
+        id, hive_id, assigned_to, created_by, status, priority, title, brief,
+        project_id, retry_count, doctor_attempts
+      )
+      VALUES (
+        ${taskRow.id}, ${taskRow.hiveId}, ${taskRow.assignedTo}, ${taskRow.createdBy},
+        ${taskRow.status}, ${taskRow.priority}, ${taskRow.title}, ${taskRow.brief},
+        ${taskRow.projectId}, ${taskRow.retryCount}, ${taskRow.doctorAttempts}
+      )
+    `;
+
+    const ctx = await buildSessionContext(sql, taskRow);
+    const result = await provisionTaskWorkspace(sql, ctx);
+
+    expect(ctx.projectWorkspace).toBe(repo);
+    expect(ctx.gitBackedProject).toBe(false);
+    expect(result.status).toBe("skipped");
+    expect(result.isolationActive).toBe(false);
+    expect(result.reason).toContain("git-backed project");
+    expect(fs.existsSync(taskWorktreePath(repo, taskRow.id))).toBe(false);
+  });
+
   it("records skipped isolation for null and non-git workspaces", async () => {
     const nullWorkspaceTask = task({ id: "40000000-0000-0000-0000-000000000004" });
     const nonGitTask = task({ id: "50000000-0000-0000-0000-000000000005" });
@@ -255,8 +307,8 @@ describe("provisionTaskWorkspace", () => {
     const nonGitDir = fs.mkdtempSync(path.join(os.tmpdir(), "hw-non-git-"));
     tempDirs.push(nonGitDir);
 
-    const nullResult = await provisionTaskWorkspace(sql, context(nullWorkspaceTask, null));
-    const nonGitResult = await provisionTaskWorkspace(sql, context(nonGitTask, nonGitDir));
+    const nullResult = await provisionTaskWorkspace(sql, context(nullWorkspaceTask, null, true));
+    const nonGitResult = await provisionTaskWorkspace(sql, context(nonGitTask, nonGitDir, true));
 
     expect(nullResult).toMatchObject({
       status: "skipped",

@@ -1,13 +1,38 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { GET as getPlan, PUT as putPlan } from "@/app/api/goals/[id]/documents/plan/route";
 import { GET as getDocuments } from "@/app/api/goals/[id]/documents/route";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
+const authState = vi.hoisted(() => ({
+  authHeader: null as string | null,
+  sessionUser: null as { email: string } | null,
+}));
+
+vi.mock("next/headers", () => ({
+  headers: async () => {
+    const headers = new Headers();
+    if (authState.authHeader) headers.set("authorization", authState.authHeader);
+    return headers;
+  },
+}));
+
+vi.mock("@/auth", () => ({
+  auth: async () => (authState.sessionUser ? { user: authState.sessionUser } : null),
+}));
+
 const PREFIX = "gdoc-api-";
+const INTERNAL_TOKEN = "goal-documents-internal-token";
+const OWNER_USER_ID = "11111111-2222-4333-8444-555555555555";
+const MEMBER_USER_ID = "22222222-3333-4444-8555-666666666666";
 let hiveId: string;
 let goalId: string;
 
 beforeEach(async () => {
+  process.env.VITEST = "true";
+  delete process.env.INTERNAL_SERVICE_TOKEN;
+  authState.authHeader = null;
+  authState.sessionUser = null;
+
   await truncateAll(sql);
 
   const [biz] = await sql`
@@ -26,9 +51,37 @@ beforeEach(async () => {
   goalId = goal.id as string;
 });
 
+afterEach(() => {
+  process.env.VITEST = "true";
+  delete process.env.INTERNAL_SERVICE_TOKEN;
+  authState.authHeader = null;
+  authState.sessionUser = null;
+});
+
 // Helper to build the `params` Promise Next.js passes to route handlers
 function paramsFor(id: string): { params: Promise<{ id: string }> } {
   return { params: Promise.resolve({ id }) };
+}
+
+async function seedSessionUser(
+  userId: string,
+  email: string,
+  isSystemOwner: boolean,
+  membershipRole?: "member" | "viewer",
+) {
+  await sql`
+    INSERT INTO users (id, email, password_hash, is_system_owner)
+    VALUES (${userId}::uuid, ${email}, 'test-hash', ${isSystemOwner})
+  `;
+  if (membershipRole) {
+    await sql`
+      INSERT INTO hive_memberships (user_id, hive_id, role)
+      VALUES (${userId}::uuid, ${hiveId}::uuid, ${membershipRole})
+    `;
+  }
+  process.env.VITEST = "false";
+  authState.authHeader = null;
+  authState.sessionUser = { email };
 }
 
 describe("GET /api/goals/:id/documents/plan", () => {
@@ -101,6 +154,111 @@ describe("PUT /api/goals/:id/documents/plan", () => {
     expect(body.title).toBe(`${PREFIX}plan`);
     expect(body.revision).toBe(1);
     expect(body.createdBy).toBe("owner");
+  });
+
+  it("allows a real system-owner session plan write without supervisor session proof", async () => {
+    await seedSessionUser(OWNER_USER_ID, "owner-goal-documents@test.local", true);
+
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+      method: "PUT",
+      body: JSON.stringify({
+        title: `${PREFIX}owner plan`,
+        body: "# Owner plan",
+      }),
+    });
+    const res = await putPlan(req, paramsFor(goalId));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.createdBy).toBe("owner");
+  });
+
+  it("rejects internal bearer service-account plan writes without supervisor session proof", async () => {
+    process.env.VITEST = "false";
+    process.env.INTERNAL_SERVICE_TOKEN = INTERNAL_TOKEN;
+    authState.authHeader = `Bearer ${INTERNAL_TOKEN}`;
+
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+      method: "PUT",
+      body: JSON.stringify({
+        title: `${PREFIX}blocked bearer plan`,
+        body: "# Should not persist",
+      }),
+    });
+    const res = await putPlan(req, paramsFor(goalId));
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toMatch(/supervisor session/i);
+
+    const rows = await sql`
+      SELECT id FROM goal_documents WHERE goal_id = ${goalId}
+    `;
+    expect(rows.length).toBe(0);
+  });
+
+  it("rejects internal bearer service-account plan writes with mismatched supervisor session proof", async () => {
+    process.env.VITEST = "false";
+    process.env.INTERNAL_SERVICE_TOKEN = INTERNAL_TOKEN;
+    authState.authHeader = `Bearer ${INTERNAL_TOKEN}`;
+
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+      method: "PUT",
+      headers: { "X-Supervisor-Session": "gs-wrong-fixture" },
+      body: JSON.stringify({
+        title: `${PREFIX}blocked wrong bearer plan`,
+        body: "# Should not persist",
+      }),
+    });
+    const res = await putPlan(req, paramsFor(goalId));
+    expect(res.status).toBe(403);
+
+    const rows = await sql`
+      SELECT id FROM goal_documents WHERE goal_id = ${goalId}
+    `;
+    expect(rows.length).toBe(0);
+  });
+
+  it("allows internal bearer service-account plan writes with matching supervisor session proof", async () => {
+    process.env.VITEST = "false";
+    process.env.INTERNAL_SERVICE_TOKEN = INTERNAL_TOKEN;
+    authState.authHeader = `Bearer ${INTERNAL_TOKEN}`;
+
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+      method: "PUT",
+      headers: { "X-Supervisor-Session": "gs-gdoc-api-fixture" },
+      body: JSON.stringify({
+        title: `${PREFIX}supervisor plan`,
+        body: "# Supervisor plan",
+      }),
+    });
+    const res = await putPlan(req, paramsFor(goalId));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.title).toBe(`${PREFIX}supervisor plan`);
+    expect(body.createdBy).toBe("goal-supervisor");
+  });
+
+  it("rejects a non-owner member session plan write without matching supervisor session proof", async () => {
+    await seedSessionUser(
+      MEMBER_USER_ID,
+      "member-goal-documents@test.local",
+      false,
+      "member",
+    );
+
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+      method: "PUT",
+      body: JSON.stringify({
+        title: `${PREFIX}member blocked plan`,
+        body: "# Member blocked plan",
+      }),
+    });
+    const res = await putPlan(req, paramsFor(goalId));
+    expect(res.status).toBe(403);
+
+    const rows = await sql`
+      SELECT id FROM goal_documents WHERE goal_id = ${goalId}
+    `;
+    expect(rows.length).toBe(0);
   });
 
   it("updates the plan and bumps revision on second PUT", async () => {

@@ -1,6 +1,6 @@
 # HiveWright
 
-HiveWright is an owner-facing operating system for running a hive autonomously: a business, a project, or a personal operation. You set the mission and the goals, HiveWright keeps work moving, and it only pulls you in when your judgement is needed.
+HiveWright is an owner-facing outcome engine for running a hive autonomously: a business, a project, or a personal operation. You set the mission and the goals, HiveWright infers or applies the right professional process, keeps work moving, and only pulls you in when your judgement is needed.
 
 This root README is the operator entry point. It focuses on first run, day-one setup, health checks, backup, update, and support. Deeper technical material lives under `docs/`.
 
@@ -9,6 +9,7 @@ This root README is the operator entry point. It focuses on first run, day-one s
 HiveWright gives you:
 
 - A dashboard for hives, goals, tasks, decisions, memory, and live activity.
+- Outcome-led goal supervision: owners state desired results, while supervisors check policies and procedures, plan execution, gather evidence, and use pipelines only when an approved process-bound procedure fits.
 - A guided new-hive flow at `Hives -> New Hive`.
 - Setup pages for models, connectors, embeddings, work intake, and setup health.
 - A built-in docs page at `/docs` that lists live roles, skills, and connectors from the running install.
@@ -19,49 +20,38 @@ Today, HiveWright runs from this repository and a local Postgres database. There
 
 If someone else is handling the machine for you, ask them to complete the command-line steps below, then start at `/login`.
 
-1. Clone HiveWright and enter the checkout:
-
-```bash
-git clone https://github.com/<owner>/<repo>.git hivewright
-cd hivewright
-```
-
-2. Install dependencies:
+1. Install dependencies:
 
 ```bash
 npm install
 ```
 
-3. Create and fill in your `.env` file with the database and secret values this install needs.
+2. Create and fill in your `.env` file with the database and secret values this install needs.
 
-```bash
-cp .env.example .env
-```
-
-4. Apply database migrations:
+3. Apply database migrations:
 
 ```bash
 npm run db:migrate:app
 ```
 
-5. Start the dashboard:
+4. Start the dashboard:
 
 ```bash
 npm run dev
 ```
 
-6. Open the dashboard in your browser and go to `/login`.
+5. Open the dashboard in your browser and go to `/login`.
 
-7. If this is a brand-new install, HiveWright will show `Create owner account`. Create the first owner, then sign in.
+6. If this is a brand-new install, HiveWright will show `Create owner account`. Create the first owner, then sign in.
 
-8. In a second terminal, start the dispatcher so HiveWright can actually run work:
+7. In a second terminal, start the dispatcher so HiveWright can actually run work:
 
 ```bash
 npm run build:dispatcher
 ./start-dispatcher.sh
 ```
 
-If you run HiveWright as user services instead of ad-hoc terminals, this repo includes editable reference units in `packaging/systemd/`. Copy them into your user systemd directory and adjust paths if your checkout is not at `~/hivewright`.
+If you run HiveWright as user services instead of ad-hoc terminals, this repo includes `hivewrightv2-dashboard.service` and `hivewrightv2-dispatcher.service` as reference units.
 
 ## Setup Walkthrough
 
@@ -113,12 +103,6 @@ pg_dump "$DATABASE_URL" > hivewright-$(date +%F).sql
 
 Before relying on a backup, test that you can restore it on another machine or a throwaway database.
 
-## What Does Not Live In Git
-
-HiveWright's repository is application source, migrations, reusable role and skill templates, static assets, and public docs. Owner data does not belong in Git.
-
-Hives, goals, tasks, decisions, memory, credentials, attachments, work products, and voice/session records live in Postgres or in operator-configured workspace roots outside this checkout. Keep `.env`, database dumps, runtime logs, QA artifacts, local screenshots, and agent workspaces out of commits.
-
 ## Update
 
 When you update HiveWright from `main`, use this order:
@@ -127,7 +111,7 @@ When you update HiveWright from `main`, use this order:
 git pull
 npm install
 npm run db:migrate:app
-systemctl --user restart hivewright-dashboard
+systemctl --user restart hivewrightv2-dashboard
 ./scripts/deferred-restart-dispatcher.sh 10
 ```
 
@@ -158,8 +142,8 @@ Open `Setup -> Connectors`, run the connector test again, and read the latest re
 If you run the included user services, check:
 
 ```bash
-systemctl --user status hivewright-dashboard
-journalctl --user -u hivewright-dashboard -n 200 --no-pager
+systemctl --user status hivewrightv2-dashboard
+journalctl --user -u hivewrightv2-dashboard -n 200 --no-pager
 ```
 
 ### HiveWright is signed in, but work is not moving
@@ -167,8 +151,8 @@ journalctl --user -u hivewright-dashboard -n 200 --no-pager
 Check the dispatcher:
 
 ```bash
-systemctl --user status hivewright-dispatcher
-journalctl --user -u hivewright-dispatcher -n 200 --no-pager
+systemctl --user status hivewrightv2-dispatcher
+journalctl --user -u hivewrightv2-dispatcher -n 200 --no-pager
 ```
 
 If the dispatcher was stopped for a while, start it again and then re-check `Setup Health`.
@@ -180,8 +164,8 @@ Voice setup is documented separately in [docs/voice-ea/README.md](docs/voice-ea/
 ## Where Deeper Docs Live
 
 - In-app live catalogue: `/docs`
-- Installation guide: [docs/installation.md](docs/installation.md)
-- Public repository boundary: [docs/public-repository-boundary.md](docs/public-repository-boundary.md)
+- Outcome engine architecture: [docs/architecture/outcome-engine.md](docs/architecture/outcome-engine.md)
+- Technical and operational docs: [docs/](docs/)
 - Voice EA runbook: [docs/voice-ea/README.md](docs/voice-ea/README.md)
 
-If you are operating the system day to day, start with this README and the dashboard's `Setup Health` page. If you are changing infrastructure, credentials, services, or runtime behavior, use the installation and boundary docs above as the public baseline.
+If you are operating the system day to day, start with this README and the dashboard's `Setup Health` page. If you are changing infrastructure, credentials, services, or runtime behavior, move into `docs/`.

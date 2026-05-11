@@ -60,8 +60,15 @@ async function resolveProjectId(
   db: Sql,
   hiveId: string,
   explicitProjectId: string | null | undefined,
+  goalId?: string | null,
 ): Promise<string | null> {
-  return await resolveDefaultProjectIdForHive(db, hiveId, explicitProjectId);
+  const resolvedProjectId = await resolveDefaultProjectIdForHive(db, hiveId, explicitProjectId);
+  if (resolvedProjectId || !goalId) return resolvedProjectId;
+
+  const [goalProject] = await db<{ project_id: string | null }[]>`
+    SELECT project_id FROM goals WHERE id = ${goalId} AND hive_id = ${hiveId} LIMIT 1
+  `;
+  return goalProject?.project_id ?? null;
 }
 
 // Per-handler authorization (audit 2026-04-22 task-area pass).
@@ -75,7 +82,8 @@ async function resolveProjectId(
 //      run or insert. System owners bypass membership via the helper itself.
 //   3. Derive `created_by` from the session instead of hardcoding 'owner'.
 // Role-slug attribution for non-owner supervisors remains blocked until role
-// propagation lands in the JWT.
+// propagation lands in the JWT — see residual-risk note in the audit doc at
+// `docs/security/2026-04-22-goal-task-mutation-auth-seams.md`.
 export async function POST(request: Request) {
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
@@ -200,6 +208,7 @@ export async function submitWorkIntake(
     db,
     input.hiveId,
     input.projectId,
+    input.goalId ?? null,
   );
   await assertScopedReferences(db, input.hiveId, {
     goalId: input.goalId ?? null,

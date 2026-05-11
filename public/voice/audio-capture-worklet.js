@@ -18,7 +18,7 @@
  * across calls.
  */
 class PcmCaptureProcessor extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super();
     this.targetRate = 16000;
     this.targetFrameSamples = 640; // 20 ms at 16 kHz

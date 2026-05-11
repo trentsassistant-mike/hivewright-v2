@@ -504,9 +504,10 @@ future sprint (see Handover Notes item 7).
    5-minute idle timeout to the UI component (see Client Usage section above).
 
 4. **Verify the dispatcher DATABASE_URL is consistent**  
-   The dispatcher requires an explicit `DATABASE_URL` from the runtime
-   environment. Confirm `.env` or the service environment is loaded before
-   starting the dispatcher.
+   `src/dispatcher/index.ts` hardcodes `postgresql://hivewright@localhost:5432/hivewrightv2`
+   at the top. `task-log-writer.ts` uses the same `sql` instance passed in as a
+   parameter. No change needed; just confirm `.env` is loaded correctly in the
+   dispatcher before running.
 
 5. **Test the full round-trip**  
    Start a task that uses the ClaudeCode adapter. Open the SSE stream in a

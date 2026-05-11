@@ -3,9 +3,11 @@ import {
   findNewGoals,
   findCompletedSprintsForWakeUp,
   markSprintWakeUpSent,
+  claimSprintWakeUp,
   revertSprintWakeUp,
   findOrphanedWakeUps,
   findSupervisorWakeReconciliationCandidates,
+  acquireGoalSupervisorWakeLock,
 } from "@/dispatcher/goal-lifecycle";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
@@ -204,6 +206,81 @@ describe("findCompletedSprintsForWakeUp", () => {
     expect(match!.completedCount).toBe(2);
     expect(match!.failedCount).toBe(1);
     expect(match!.cancelledCount).toBe(1);
+  });
+});
+
+describe("claimSprintWakeUp", () => {
+  it("allows only one caller to claim a completed sprint wake", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${bizId}, 'glc-test-atomic-claim', 'active', 'gs-atomic-claim')
+      RETURNING *
+    `;
+
+    const [first, second] = await Promise.all([
+      claimSprintWakeUp(sql, goal.id as string, 2),
+      claimSprintWakeUp(sql, goal.id as string, 2),
+    ]);
+
+    expect([first, second].filter(Boolean)).toHaveLength(1);
+    const [row] = await sql`SELECT last_woken_sprint FROM goals WHERE id = ${goal.id}`;
+    expect(row.last_woken_sprint).toBe(2);
+  });
+
+  it("does not claim an older sprint after a newer sprint has already been marked", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id, last_woken_sprint)
+      VALUES (${bizId}, 'glc-test-atomic-old', 'active', 'gs-atomic-old', 3)
+      RETURNING *
+    `;
+
+    await expect(claimSprintWakeUp(sql, goal.id as string, 2)).resolves.toBe(false);
+
+    const [row] = await sql`SELECT last_woken_sprint FROM goals WHERE id = ${goal.id}`;
+    expect(row.last_woken_sprint).toBe(3);
+  });
+});
+
+describe("acquireGoalSupervisorWakeLock", () => {
+  it("excludes concurrent supervisor wakes for the same goal", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${bizId}, 'glc-test-wake-lock', 'active', 'gs-wake-lock')
+      RETURNING *
+    `;
+
+    const first = await acquireGoalSupervisorWakeLock(sql, goal.id as string);
+    expect(first).not.toBeNull();
+
+    const second = await acquireGoalSupervisorWakeLock(sql, goal.id as string);
+    expect(second).toBeNull();
+
+    await first!();
+    const third = await acquireGoalSupervisorWakeLock(sql, goal.id as string);
+    expect(third).not.toBeNull();
+    await third!();
+  });
+
+  it("allows simultaneous supervisor wakes for different goals", async () => {
+    const [firstGoal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${bizId}, 'glc-test-wake-lock-a', 'active', 'gs-wake-lock-a')
+      RETURNING *
+    `;
+    const [secondGoal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${bizId}, 'glc-test-wake-lock-b', 'active', 'gs-wake-lock-b')
+      RETURNING *
+    `;
+
+    const first = await acquireGoalSupervisorWakeLock(sql, firstGoal.id as string);
+    const second = await acquireGoalSupervisorWakeLock(sql, secondGoal.id as string);
+
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+
+    await first!();
+    await second!();
   });
 });
 

@@ -666,6 +666,48 @@
       "when": 1778120000000,
       "tag": "0097_voice_ea_connector_rename",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1778123600000,
+      "tag": "0098_pipeline_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1778127200000,
+      "tag": "0099_seed_pipeline_templates",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1778130800000,
+      "tag": "0100_pipeline_execution_rules",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1778286748000,
+      "tag": "0101_pipeline_content_runtime_tuning",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1778316849000,
+      "tag": "0102_repo_neutral_projects",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1778373600000,
+      "tag": "0103_goal_outcome_learning_records",
+      "breakpoints": true
     }
   ]
 }

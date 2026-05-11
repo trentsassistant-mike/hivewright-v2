@@ -80,7 +80,7 @@ describe("PATCH /api/hives/[id]", () => {
         type: "business",
         description: null,
         mission: null,
-        workspace_path: "/home/example/hives/valid-hive/projects",
+        workspace_path: "$HOME/hives/valid-hive/projects",
         is_system_fixture: false,
         created_at: "2026-04-27T00:00:00.000Z",
       }]);

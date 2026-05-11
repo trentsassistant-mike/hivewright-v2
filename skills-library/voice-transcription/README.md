@@ -53,8 +53,7 @@ Typical costs:
 - 5-minute recording: ~$0.030
 - 1-hour meeting: ~$0.360
 
-Every call is logged to
-`${HIVEWRIGHT_VOICE_TRANSCRIPTION_COST_LOG:-$HIVEWRIGHT_DATA_HOME/logs/voice-transcription-cost.log}`.
+Every call is logged to `$HOME/hivewright/logs/voice-transcription-cost.log`.
 
 ## Troubleshooting
 
@@ -71,6 +70,6 @@ Every call is logged to
 
 ## Log Location
 
-`${HIVEWRIGHT_VOICE_TRANSCRIPTION_COST_LOG:-$HIVEWRIGHT_DATA_HOME/logs/voice-transcription-cost.log}`
+`$HOME/hivewright/logs/voice-transcription-cost.log`
 
 Format: `YYYY-MM-DD HH:MM:SS | file=<basename> | size=<bytes>B | model=whisper-1 | cost=~$0.001-0.006`

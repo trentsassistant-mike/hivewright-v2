@@ -149,6 +149,11 @@ describe("parseQaVerdict", () => {
     expect(parseQaVerdict("Review notes...\nVerdict: FAIL\n")).toBe("fail");
   });
 
+  it("treats QA Result markdown prefix lines as verdicts", () => {
+    expect(parseQaVerdict("## QA Result: **PASS**\n\nAll criteria met.")).toBe("pass");
+    expect(parseQaVerdict("QA Verdict: `FAIL`\n\nMissing artifact evidence.")).toBe("fail");
+  });
+
   it("treats markdown-decorated verdict lines as a verdict", () => {
     expect(parseQaVerdict("# Review\n\n**pass**\n\nDetails follow.")).toBe("pass");
   });
@@ -178,7 +183,58 @@ describe("processQaResult", () => {
     expect(updated.failure_reason).toBeNull();
   });
 
-  it("resets task to pending on QA fail with feedback appended", async () => {
+  it("advances a pipeline step only after its QA review passes", async () => {
+    const [template] = await sql<{ id: string }[]>`
+      INSERT INTO pipeline_templates (scope, hive_id, slug, name, department, version, active)
+      VALUES ('hive', ${bizId}, 'qa-gated-pipeline', 'QA-gated pipeline', 'content', 1, true)
+      RETURNING id
+    `;
+    const steps = await sql<{ id: string; step_order: number }[]>`
+      INSERT INTO pipeline_steps (template_id, step_order, slug, name, role_slug, duty, qa_required)
+      VALUES
+        (${template.id}, 1, 'edit', 'Edit', 'qa-test-role', 'Edit the draft', true),
+        (${template.id}, 2, 'publish', 'Publish', 'qa-test-role', 'Publish the approved draft', false)
+      RETURNING id, step_order
+    `;
+    const [task] = await sql<{ id: string }[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, qa_required, result_summary)
+      VALUES (${bizId}, 'qa-test-role', 'pipeline', 'Pipeline: Edit', 'Edit brief', 'in_review', true, 'Edited deliverable')
+      RETURNING id
+    `;
+    const [run] = await sql<{ id: string }[]>`
+      INSERT INTO pipeline_runs (hive_id, template_id, template_version, status, current_step_id)
+      VALUES (${bizId}, ${template.id}, 1, 'active', ${steps.find((step) => step.step_order === 1)!.id})
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO pipeline_step_runs (run_id, step_id, task_id, status)
+      VALUES (${run.id}, ${steps.find((step) => step.step_order === 1)!.id}, ${task.id}, 'pending')
+    `;
+
+    await processQaResult(sql, task.id, { passed: true, feedback: null });
+
+    const stepRuns = await sql<{ status: string; step_order: number; task_id: string | null }[]>`
+      SELECT psr.status, ps.step_order, psr.task_id
+      FROM pipeline_step_runs psr
+      JOIN pipeline_steps ps ON ps.id = psr.step_id
+      WHERE psr.run_id = ${run.id}
+      ORDER BY ps.step_order
+    `;
+    const [updatedRun] = await sql<{ current_step_id: string }[]>`
+      SELECT current_step_id FROM pipeline_runs WHERE id = ${run.id}
+    `;
+    const [nextTask] = await sql<{ title: string; status: string; brief: string }[]>`
+      SELECT title, status, brief FROM tasks WHERE id = ${stepRuns[1].task_id}
+    `;
+
+    expect(stepRuns.map((step) => step.status)).toEqual(["complete", "pending"]);
+    expect(updatedRun.current_step_id).toBe(steps.find((step) => step.step_order === 2)!.id);
+    expect(nextTask.title).toBe("Pipeline: Publish");
+    expect(nextTask.status).toBe("pending");
+    expect(nextTask.brief).toContain("Previous step result:\nEdited deliverable");
+  });
+
+  it("resets task to pending on true quality QA fail with lean delta feedback appended", async () => {
     const [task] = await sql`
       INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
       VALUES (${bizId}, 'qa-test-role', 'owner', 'qa-test-fail', 'Do work', 'in_review')
@@ -190,7 +246,50 @@ describe("processQaResult", () => {
     const [updated] = await sql`SELECT status, brief FROM tasks WHERE id = ${task.id}`;
     expect(updated.status).toBe("pending");
     expect(updated.brief).toContain("Missing error handling");
+    expect(updated.brief).toContain("Failure class: quality_fail");
+    expect(updated.brief).toContain("address only the delta below");
     expect(updated.brief).toContain("QA Feedback");
+  });
+
+  it("blocks runtime/parser QA failures without quality rework churn", async () => {
+    const [task] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+      VALUES (${bizId}, 'qa-test-role', 'owner', 'qa-test-runtime-noise', 'Do work', 'in_review')
+      RETURNING *
+    `;
+
+    await processQaResult(sql, task.id, {
+      passed: false,
+      feedback: "runtime_blocked: health gate blocked spawn before QA could inspect deliverables",
+      failureClass: "runtime_blocked",
+    });
+
+    const [updated] = await sql`SELECT status, brief, failure_reason, retry_count FROM tasks WHERE id = ${task.id}`;
+    expect(updated.status).toBe("blocked");
+    expect(updated.retry_count).toBe(0);
+    expect(updated.brief).toBe("Do work");
+    expect(updated.failure_reason).toContain("runtime_blocked");
+
+    const children = await sql`SELECT id FROM tasks WHERE parent_task_id = ${task.id}`;
+    expect(children).toHaveLength(0);
+  });
+
+  it("keeps explicit QA fail as quality rework even when feedback mentions runtime terms", async () => {
+    const [task] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+      VALUES (${bizId}, 'qa-test-role', 'owner', 'qa-explicit-fail-runtime-words', 'Do work', 'in_review')
+      RETURNING *
+    `;
+
+    await processQaResult(sql, task.id, {
+      passed: false,
+      feedback: "Quality failure: missing handling for model health gate and adapter errors",
+    });
+
+    const [updated] = await sql`SELECT status, brief, retry_count FROM tasks WHERE id = ${task.id}`;
+    expect(updated.status).toBe("pending");
+    expect(updated.retry_count).toBe(1);
+    expect(updated.brief).toContain("Failure class: quality_fail");
   });
 
   it("creates an owner decision and blocks a direct task when the QA retry cap is reached", async () => {

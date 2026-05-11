@@ -277,6 +277,12 @@ export interface WorktreeProvisionResult extends WorktreeProvisionMetadata {
 
 export interface ProvisionWorktreeDeps {
   /**
+   * Policy gate: callers must assert the workspace came from an explicit
+   * project with projects.git_repo=true. Git-looking hive paths or projects
+   * with git_repo=false are not eligible for worktree provisioning.
+   */
+  gitBackedProject?: boolean;
+  /**
    * Persist worktree metadata. Awaited before any return so callers and
    * downstream consumers (supervisor, doctor, audit) cannot observe the
    * provisioned worktree before its row exists.
@@ -340,6 +346,22 @@ export async function provisionWorktree(
   deps: ProvisionWorktreeDeps = {},
 ): Promise<WorktreeProvisionResult> {
   const log = deps.log ?? defaultLog;
+
+  if (deps.gitBackedProject !== true) {
+    const reason = "Worktree isolation disabled: task is not associated with a git-backed project (projects.git_repo=true).";
+    const metadata: WorktreeProvisionMetadata = {
+      taskId,
+      status: "disabled",
+      baseWorkspace: typeof baseWorkspace === "string" && baseWorkspace.trim() ? baseWorkspace.trim() : null,
+      worktreePath: null,
+      branchName: null,
+      reused: false,
+      reason,
+    };
+    log("info", `task ${taskId}: ${reason}`);
+    const persisted = await runPersist(deps.persist, metadata);
+    return { ...metadata, metadataPersisted: persisted };
+  }
 
   const trimmedBase = typeof baseWorkspace === "string" ? baseWorkspace.trim() : "";
   if (!trimmedBase) {
@@ -408,11 +430,20 @@ export async function provisionTaskWorkspace(
   sql: Sql,
   ctx: SessionContext,
 ): Promise<ProvisionTaskWorkspaceResult> {
-  const existing = await loadExistingTaskWorkspace(sql, ctx);
-  if (existing) return existing;
-
   const baseWorkspacePath = ctx.projectWorkspace;
   ctx.baseProjectWorkspace = baseWorkspacePath;
+
+  if (ctx.gitBackedProject !== true) {
+    return skipped(
+      sql,
+      ctx,
+      "Worktree isolation disabled: task is not associated with a git-backed project (projects.git_repo=true).",
+      baseWorkspacePath,
+    );
+  }
+
+  const existing = await loadExistingTaskWorkspace(sql, ctx);
+  if (existing) return existing;
 
   if (!baseWorkspacePath) {
     return skipped(sql, ctx, "No workspace path resolved for task; isolation disabled.", null);

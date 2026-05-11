@@ -4,13 +4,16 @@ import postgres from "postgres";
 import { verifyCredentials, countUsers } from "./auth/users";
 import { authConfig } from "./auth.config";
 import { resolveBootstrapDashboardPassword } from "./auth/defaults";
-import { requireEnv } from "./lib/required-env";
 
 // Dedicated SQL handle so auth.ts doesn't depend on the shared API-layer pool.
 // NextAuth runs before request handlers, so using the singleton here could
 // deadlock during cold start.
 function db() {
-  return postgres(requireEnv("DATABASE_URL"), { max: 2 });
+  return postgres(
+    process.env.DATABASE_URL ||
+      "postgresql://hivewright@localhost:5432/hivewrightv2",
+    { max: 2 },
+  );
 }
 
 export const { handlers, signIn, signOut, auth } = NextAuth({

@@ -1,9 +1,8 @@
 import "dotenv/config";
 import postgres from "postgres";
 import { sendDiscordChannelMessage } from "../src/dispatcher/notifier";
-import { requireEnv } from "../src/lib/required-env";
 
-const DATABASE_URL = requireEnv("DATABASE_URL");
+const DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://hivewright@localhost:5432/hivewrightv2";
 
 async function main() {
   if (process.env.NOTIFIER_LIVE_SMOKE !== "1") {

@@ -219,9 +219,7 @@ describe("Phase 5 Integration: Interfaces", () => {
     // Listen on the task_events channel using a separate connection
     const { default: postgres } = await import("postgres");
     const listenerSql = postgres(
-      process.env.TEST_DATABASE_URL ??
-        process.env.DATABASE_URL ??
-        "postgresql://hivewright:hivewright@localhost:5432/hivewright_test",
+      process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "postgresql://hivewright:placeholder@localhost:5432/hivewrightv2_test",
     );
 
     let received: string | null = null;

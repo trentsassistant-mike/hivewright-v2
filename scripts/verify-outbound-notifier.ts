@@ -1,9 +1,8 @@
 import "dotenv/config";
 import postgres, { type Sql } from "postgres";
 import { OutboundNotifier } from "../src/dispatcher/notifier";
-import { requireEnv } from "../src/lib/required-env";
 
-const DATABASE_URL = requireEnv("DATABASE_URL");
+const DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://hivewright@localhost:5432/hivewrightv2";
 const HIVE_ID = "00000000-0000-4000-8000-000000007171";
 const DECISION_ID = "00000000-0000-4000-8000-000000007172";
 const ACHIEVED_GOAL_ID = "00000000-0000-4000-8000-000000007173";

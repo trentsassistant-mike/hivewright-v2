@@ -1,13 +1,13 @@
-import "dotenv/config";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { resolveRuntimePath } from "../src/runtime/paths";
 import postgres, { type Sql } from "postgres";
 import { submitWorkIntake } from "../src/app/api/work/route";
 import { checkAndFireSchedules } from "../src/dispatcher/schedule-timer";
 import { withDisposableHive } from "./_lib/disposable-hive";
-import { requireEnv } from "../src/lib/required-env";
 
-const DATABASE_URL = requireEnv("DATABASE_URL");
+const DATABASE_URL =
+  process.env.DATABASE_URL ?? "postgresql://hivewright@localhost:5432/hivewrightv2";
 const DEMO_FLAG = "--demo";
 const OUT_FLAG = "--out";
 
@@ -217,7 +217,7 @@ async function saveEvidencePacket(
 ): Promise<InitiativeEvidencePacket> {
   const packetPath = explicitPath
     ? path.resolve(explicitPath)
-    : path.resolve(process.cwd(), "artifacts", "initiative-run-evidence", `${packet.runId}.json`);
+    : resolveRuntimePath(["artifacts", "initiative-run-evidence", `${packet.runId}.json`]);
 
   await mkdir(path.dirname(packetPath), { recursive: true });
   const completedPacket: InitiativeEvidencePacket = { ...packet, packetPath };

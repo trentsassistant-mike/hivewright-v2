@@ -79,6 +79,10 @@ function verifyCreatedPathNoSymlinkEscape(workspacePath: string, allowedRoot: st
   }
 }
 
+function isGitRepository(workspacePath: string): boolean {
+  return fs.existsSync(path.join(workspacePath, ".git"));
+}
+
 function mapProjectRow(r: ProjectRow) {
   return {
     id: r.id,
@@ -180,9 +184,13 @@ export async function POST(request: Request) {
     fs.mkdirSync(workspacePath, { recursive: true });
     verifyCreatedPathNoSymlinkEscape(workspacePath, hiveProjectsRoot);
 
+    if (gitRepo === true && !isGitRepository(workspacePath)) {
+      return jsonError("gitRepo=true requires workspacePath to point at an existing Git repository", 400);
+    }
+
     const rows = await sql`
       INSERT INTO projects (hive_id, slug, name, workspace_path, git_repo)
-      VALUES (${hiveId}, ${slug}, ${name}, ${workspacePath}, ${gitRepo ?? true})
+      VALUES (${hiveId}, ${slug}, ${name}, ${workspacePath}, ${gitRepo === true})
       RETURNING id, hive_id, slug, name, workspace_path, git_repo, created_at, updated_at
     `;
 

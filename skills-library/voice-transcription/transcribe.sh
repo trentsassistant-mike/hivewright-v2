@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HIVEWRIGHT_DATA_HOME="${HIVEWRIGHT_DATA_HOME:-${HOME}/.local/share/hivewright}"
-COST_LOG="${HIVEWRIGHT_VOICE_TRANSCRIPTION_COST_LOG:-${HIVEWRIGHT_DATA_HOME}/logs/voice-transcription-cost.log}"
+COST_LOG="$HOME/hivewright/logs/voice-transcription-cost.log"
 SUPPORTED_EXTS="flac mp3 mp4 mpeg mpga m4a ogg opus wav webm"
 
 # 1. Validate argument present

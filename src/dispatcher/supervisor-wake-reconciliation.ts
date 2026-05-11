@@ -1,5 +1,5 @@
 import type { Sql } from "postgres";
-import { findSupervisorWakeReconciliationCandidates } from "./goal-lifecycle";
+import { findSupervisorWakeReconciliationCandidates, withGoalSupervisorWakeLock } from "./goal-lifecycle";
 
 export interface SupervisorWakeReconciliationState {
   inFlight: Set<string>;
@@ -46,8 +46,18 @@ export async function runSupervisorWakeReconciliation(
 
     state.inFlight.add(key);
     try {
-      const { wakeUpSupervisor } = await import("../goals/supervisor");
-      const wakeResult = await wakeUpSupervisor(sql, candidate.goalId, candidate.sprintNumber);
+      const lockedWake = await withGoalSupervisorWakeLock(sql, candidate.goalId, async () => {
+        const { wakeUpSupervisor } = await import("../goals/supervisor");
+        return await wakeUpSupervisor(sql, candidate.goalId, candidate.sprintNumber);
+      });
+      if (!lockedWake.acquired) {
+        result.skipped++;
+        console.log(
+          `[dispatcher] Supervisor wake reconciliation skipped for goal ${candidate.goalId} sprint ${candidate.sprintNumber}: supervisor already in flight.`,
+        );
+        continue;
+      }
+      const wakeResult = lockedWake.result;
       if (wakeResult.success) {
         state.fired.add(key);
         result.fired++;

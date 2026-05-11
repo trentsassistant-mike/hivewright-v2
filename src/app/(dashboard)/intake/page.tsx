@@ -149,9 +149,9 @@ export default function IntakePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Work Intake</h1>
+        <h1 className="text-2xl font-semibold">Outcome Intake</h1>
         <p className="text-sm text-zinc-500 mt-1">
-          Describe what you want done. The system will classify it as a task or goal automatically.
+          Tell HiveWright the outcome you want, not the step-by-step method. The supervisor will decide whether this is a direct task or a goal, infer the right approach, and use approved procedures only when a mandatory process applies.
         </p>
       </div>
 
@@ -205,14 +205,14 @@ export default function IntakePage() {
 
         <div className="space-y-1">
           <label htmlFor="input" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            What do you want done?
+            Desired outcome
           </label>
           <textarea
             id="input"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             rows={6}
-            placeholder="Describe the work you want to assign..."
+            placeholder="Example: Get three qualified leads for the roofing offer this week, using any approved sales procedures that apply."
             className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder-zinc-500"
           />
         </div>

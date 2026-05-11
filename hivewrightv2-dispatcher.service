@@ -1,0 +1,17 @@
+[Unit]
+Description=HiveWright v2 Dispatcher
+After=network.target hivewrightv2-dashboard.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/hivewrightv2
+ExecStart=/bin/bash %h/hivewrightv2/start-dispatcher.sh
+Restart=always
+RestartSec=15
+Environment=HIVEWRIGHT_RUNTIME_ROOT=%h/.hivewright
+EnvironmentFile=%h/.hivewright/config/.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

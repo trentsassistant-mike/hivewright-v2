@@ -1,8 +1,7 @@
-import "dotenv/config";
 import postgres from "postgres";
-import { requireEnv } from "../src/lib/required-env";
 
-const DATABASE_URL = requireEnv("DATABASE_URL");
+const DATABASE_URL =
+  process.env.DATABASE_URL ?? "postgresql://hivewright:placeholder@localhost:5432/hivewrightv2";
 const TARGET_GOAL_ID = "14c723f1-e235-467b-9f9f-7f5f0f0d1c9b";
 const TARGET_SCHEDULE_ID = "e478adf9-ae66-440b-b58a-5367cbf3c7d7";
 const DORMANT_MIN_AGE_HOURS = 24;

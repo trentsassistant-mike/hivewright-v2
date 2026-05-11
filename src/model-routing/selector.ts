@@ -14,6 +14,7 @@ export interface ModelRoutingCandidate {
   model: string;
   enabled?: boolean;
   status?: "healthy" | "unknown" | "unhealthy" | "degraded" | "disabled";
+  probeFreshness?: "fresh" | "due" | "never";
   qualityScore?: number;
   costScore?: number;
   capabilityScores?: ModelCapabilityScoreView[];
@@ -109,7 +110,7 @@ export function resolveConfiguredModelRoute(
 
   const scoredCandidates = policy.candidates
     .filter((candidate) => candidate.enabled !== false)
-    .filter((candidate) => isCandidateHealthEligible(candidate.status))
+    .filter((candidate) => isCandidateHealthEligible(candidate))
     .filter((candidate) => manualAdapterType === null || candidate.adapterType === manualAdapterType)
     .filter((candidate) => manualModel === null || candidate.model === manualModel)
     .filter((candidate) => allowlist.size === 0 || allowlist.has(candidate.model))
@@ -186,9 +187,10 @@ function normalizeManualValue(value: string | null | undefined): string | null {
   return trimmed;
 }
 
-function isCandidateHealthEligible(status: ModelRoutingCandidate["status"]): boolean {
-  if (!status) return true;
-  return status === "healthy" || status === "degraded";
+function isCandidateHealthEligible(candidate: ModelRoutingCandidate): boolean {
+  if (candidate.probeFreshness && candidate.probeFreshness !== "fresh") return false;
+  if (!candidate.status) return true;
+  return candidate.status === "healthy" || candidate.status === "degraded";
 }
 
 interface ScoreCandidateOptions {

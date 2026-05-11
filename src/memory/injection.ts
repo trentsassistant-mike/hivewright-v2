@@ -1,8 +1,9 @@
 import type { Sql } from "postgres";
-import type { MemoryContext } from "../adapters/types";
+import type { ContextProvenanceEntry, MemoryContext } from "../adapters/types";
 import { formatWithFreshness } from "./freshness";
 import { findSimilar, type SimilarityResult } from "./embeddings";
 import type { ModelCallerConfig } from "./model-caller";
+import { createTaskContextProvenance } from "../provenance/task-context";
 
 export interface InjectionQuery {
   roleSlug: string;
@@ -43,7 +44,7 @@ export async function queryRelevantMemory(
 
   // 2. Query role memories (excluding superseded and restricted)
   const roleMemoryRows = await sql`
-    SELECT id, content, confidence, updated_at, access_count
+    SELECT id, content, confidence, updated_at, access_count, source_task_id
     FROM role_memory
     WHERE role_slug = ${query.roleSlug}
       AND hive_id = ${query.hiveId}
@@ -60,6 +61,7 @@ export async function queryRelevantMemory(
     const score = recencyScore + accessScore + semanticBoost;
     return {
       id: r.id as string,
+      sourceTaskId: r.source_task_id as string | null,
       content: formatWithFreshness(r.content as string, r.updated_at as Date),
       confidence: r.confidence as number,
       updatedAt: r.updated_at as Date,
@@ -69,7 +71,7 @@ export async function queryRelevantMemory(
 
   // 3. Query hive memories (excluding restricted)
   const hiveMemoryRows = await sql`
-    SELECT id, content, category, confidence, updated_at, access_count, department
+    SELECT id, content, category, confidence, updated_at, access_count, department, source_task_id
     FROM hive_memory
     WHERE hive_id = ${query.hiveId}
       AND superseded_by IS NULL
@@ -86,6 +88,7 @@ export async function queryRelevantMemory(
     const score = recencyScore + accessScore + semanticBoost + deptBoost;
     return {
       id: r.id as string,
+      sourceTaskId: r.source_task_id as string | null,
       content: formatWithFreshness(r.content as string, r.updated_at as Date),
       category: r.category as string,
       confidence: r.confidence as number,
@@ -134,6 +137,33 @@ export async function queryRelevantMemory(
     `;
   }
 
+  const provenanceEntries: ContextProvenanceEntry[] = [
+    ...scoredRoleMemories.map((memory) => ({
+      sourceClass: "role_memory" as const,
+      reference: `role_memory:${memory.id}`,
+      sourceId: memory.id,
+      sourceTaskId: memory.sourceTaskId,
+      category: null,
+    })),
+    ...scoredHiveMemories.map((memory) => ({
+      sourceClass: "hive_memory" as const,
+      reference: `hive_memory:${memory.id}`,
+      sourceId: memory.id,
+      sourceTaskId: memory.sourceTaskId,
+      category: memory.category,
+    })),
+    ...insightRows.map((insight) => {
+      const id = insight.id as string;
+      return {
+        sourceClass: "insight" as const,
+        reference: `insights:${id}`,
+        sourceId: id,
+        sourceTaskId: null,
+        category: insight.connection_type as string,
+      };
+    }),
+  ];
+
   // 6. Capacity
   const [capacityRow] = await sql`
     SELECT COUNT(*)::int AS count FROM role_memory
@@ -157,6 +187,7 @@ export async function queryRelevantMemory(
       connectionType: r.connection_type as string,
       confidence: r.confidence as number,
     })),
+    provenance: createTaskContextProvenance(provenanceEntries),
     capacity: (() => {
       const count = capacityRow?.count ?? 0;
       return count >= 160

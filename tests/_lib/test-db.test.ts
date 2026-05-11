@@ -14,9 +14,9 @@ afterAll(async () => {
 });
 
 describe("test-db helper", () => {
-  it("connects to a hivewright_test-prefixed database, not prod", async () => {
+  it("connects to a hivewrightv2_test-prefixed database, not prod", async () => {
     const [row] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
-    expect(row.db.startsWith("hivewright_test")).toBe(true);
+    expect(row.db.startsWith("hivewrightv2_test")).toBe(true);
   });
 
   it("holds a run-level advisory lock for the effective test database", async () => {
@@ -24,7 +24,7 @@ describe("test-db helper", () => {
     const outsider = postgres(
       process.env.TEST_DATABASE_URL ??
         process.env.DATABASE_URL ??
-        "postgresql://hivewright:hivewright@localhost:5432/hivewright_test",
+        "postgresql://hivewright:placeholder@localhost:5432/hivewrightv2_test",
       { max: 1 },
     );
 

@@ -1,6 +1,12 @@
 import { sql } from "../_lib/db";
 import { jsonError, jsonPaginated, parseSearchParams } from "../_lib/responses";
-import { enforceInternalTaskHiveScope, requireApiUser, requireSystemOwner } from "../_lib/auth";
+import {
+  enforceInternalTaskHiveScope,
+  isInternalServiceAccountUser,
+  requireApiUser,
+  requireSystemOwner,
+  type AuthenticatedApiUser,
+} from "../_lib/auth";
 import { readIdempotencyKey, runIdempotentCreate } from "../_lib/idempotency";
 import { canAccessHive } from "@/auth/users";
 import {
@@ -9,6 +15,7 @@ import {
 } from "@/ea/native/direct-create-bypass";
 import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
 import { DefaultProjectResolutionError, resolveDefaultProjectIdForHive } from "@/projects/default-project";
+import { rejectDirectContentTaskWhenPipelineFits } from "@/goals/supervisor-tools";
 import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
 import {
   assertHiveCreationAllowed,
@@ -85,6 +92,40 @@ function mapTaskRow(r: TaskRow) {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
+}
+
+async function requireGoalSupervisorTaskProof(
+  request: Request,
+  user: AuthenticatedApiUser,
+  input: { hiveId: string; goalId: unknown; createdBy: unknown },
+): Promise<Response | null> {
+  if (!isInternalServiceAccountUser(user) || input.createdBy !== "goal-supervisor") {
+    return null;
+  }
+
+  if (typeof input.goalId !== "string" || input.goalId.trim().length === 0) {
+    return jsonError("goal-supervisor task creates require goalId", 400);
+  }
+
+  const [goal] = await sql<{ hive_id: string; session_id: string | null }[]>`
+    SELECT hive_id, session_id
+    FROM goals
+    WHERE id = ${input.goalId}
+    LIMIT 1
+  `;
+  if (!goal || goal.hive_id !== input.hiveId) {
+    return jsonError("Forbidden: goal does not belong to hive", 403);
+  }
+
+  const callerSession = request.headers.get("x-supervisor-session")?.trim() ?? "";
+  if (!callerSession || callerSession !== goal.session_id) {
+    return jsonError(
+      "Forbidden: caller is not the supervisor session for this goal",
+      403,
+    );
+  }
+
+  return null;
 }
 
 export async function GET(request: Request) {
@@ -204,6 +245,13 @@ export async function POST(request: Request) {
       return jsonError("Missing required fields: hiveId, assignedTo, title, brief", 400);
     }
 
+    const supervisorProof = await requireGoalSupervisorTaskProof(request, authz.user, {
+      hiveId,
+      goalId,
+      createdBy,
+    });
+    if (supervisorProof) return supervisorProof;
+
     const eaBypassResult = requireEaDirectCreateBypassReason(request, body);
     if (!eaBypassResult.ok) return eaBypassResult.response;
 
@@ -213,13 +261,30 @@ export async function POST(request: Request) {
     const creationPause = await assertHiveCreationAllowed(sql, hiveId);
     if (creationPause) return creationPausedResponse(creationPause);
 
-    const resolvedProjectId = await resolveDefaultProjectIdForHive(sql, hiveId, requestedProjectId);
+    let resolvedProjectId = await resolveDefaultProjectIdForHive(sql, hiveId, requestedProjectId);
+    if (!resolvedProjectId && goalId) {
+      const [goalProject] = await sql<{ project_id: string | null }[]>`
+        SELECT project_id FROM goals WHERE id = ${goalId} AND hive_id = ${hiveId} LIMIT 1
+      `;
+      resolvedProjectId = goalProject?.project_id ?? null;
+    }
 
     const referenceCheck = await assertTaskReferencesBelongToHive(hiveId, {
       goalId: goalId ?? null,
       projectId: resolvedProjectId,
     });
     if (referenceCheck) return referenceCheck;
+
+    if (createdBy === "goal-supervisor") {
+      const taskKind = typeof body.task_kind === "string" ? body.task_kind : "implementation";
+      const pipelineGate = await rejectDirectContentTaskWhenPipelineFits(sql, hiveId, {
+        assigned_to: assignedTo,
+        title,
+        brief,
+        acceptance_criteria: acceptanceCriteria,
+      }, taskKind);
+      if (pipelineGate) return jsonError(pipelineGate.message, 409);
+    }
 
     // Validate delegation — if createdBy is a role (not "owner"), check delegates_to
     if (

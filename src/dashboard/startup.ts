@@ -1,8 +1,7 @@
 import postgres, { type Sql } from "postgres";
 import { assertBundledMigrationsApplied } from "@/db/startup-migration-assertion";
-import { requireEnv } from "@/lib/required-env";
 
-const DATABASE_URL = requireEnv("DATABASE_URL");
+const DATABASE_URL = process.env.DATABASE_URL || "postgresql://hivewright@localhost:5432/hivewrightv2";
 
 export async function assertDashboardStartupMigrations(sql?: Sql): Promise<void> {
   if (sql) {

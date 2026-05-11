@@ -5,33 +5,34 @@ import path from "path";
 import { buildSupervisorInitialPrompt, buildSprintWakeUpPrompt } from "./supervisor-session";
 import { hiveGoalWorkspacePath } from "@/hives/workspace-root";
 import { resolveGoalSupervisorRuntime } from "./supervisor-routing";
+import { buildGoalSupervisorProcessEnv } from "./supervisor-env";
+import { buildSupervisorToolsMd } from "./supervisor-tool-contract";
 
-const OPENCLAW_BIN = [
-  process.env.OPENCLAW_BIN,
-  process.env.HOME ? path.join(process.env.HOME, ".npm-global/bin/openclaw") : undefined,
-  "/usr/local/bin/openclaw",
-  "openclaw",
-].filter((p): p is string => Boolean(p))
-  .find((p) => { try { fs.accessSync(p); return true; } catch { return false; } }) || "openclaw";
+const OPENCLAW_BIN = ["/home/hivewright/.npm-global/bin/openclaw", "/usr/local/bin/openclaw", "openclaw"]
+  .find(p => { try { fs.accessSync(p); return true; } catch { return false; } }) || "openclaw";
 
-const OPENCLAW_ENV = {
-  ...process.env,
-  PATH: [
-    process.env.HOME ? path.join(process.env.HOME, ".npm-global/bin") : undefined,
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
-    process.env.PATH,
-  ].filter(Boolean).join(":"),
-};
+function buildOpenClawEnv(supervisorSession: string): NodeJS.ProcessEnv {
+  return buildGoalSupervisorProcessEnv(
+    {
+      ...process.env,
+      PATH: `/home/hivewright/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ""}`,
+    },
+    supervisorSession,
+  );
+}
 
-function runOpenClaw(args: string[], cwd: string, timeout = 300_000): Promise<{ stdout: string; stderr: string; code: number }> {
+function runOpenClaw(
+  args: string[],
+  cwd: string,
+  supervisorSession: string,
+  timeout = 300_000,
+): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
     const proc = spawn(OPENCLAW_BIN, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       timeout,
-      env: OPENCLAW_ENV,
+      env: buildOpenClawEnv(supervisorSession),
     });
     let stdout = "", stderr = "";
     proc.stdout.on("data", (d) => { stdout += d.toString(); });
@@ -50,13 +51,18 @@ function extractJsonArray(text: string): string | null {
   return null;
 }
 
-async function ensureSupervisorAgent(agentId: string, workspacePath: string, model: string): Promise<{ ok: boolean; error?: string }> {
-  const agentDir = path.join(process.env.HOME ?? process.cwd(), ".openclaw", "agents", agentId, "agent");
+async function ensureSupervisorAgent(
+  agentId: string,
+  workspacePath: string,
+  model: string,
+  supervisorSession: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const agentDir = path.join(process.env.HOME || "/home/hivewright", ".openclaw", "agents", agentId, "agent");
   if (fs.existsSync(agentDir)) {
     return { ok: true };
   }
 
-  const listResult = await runOpenClaw(["agents", "list", "--json"], workspacePath, 60_000);
+  const listResult = await runOpenClaw(["agents", "list", "--json"], workspacePath, supervisorSession, 60_000);
   if (listResult.code === 0) {
     try {
       const jsonText = extractJsonArray(listResult.stdout);
@@ -74,6 +80,7 @@ async function ensureSupervisorAgent(agentId: string, workspacePath: string, mod
   const addResult = await runOpenClaw(
     ["agents", "add", agentId, "--workspace", workspacePath, "--model", model, "--non-interactive"],
     workspacePath,
+    supervisorSession,
     120_000,
   );
   if (addResult.code !== 0) {
@@ -94,65 +101,9 @@ function runSupervisorInWorkspace(
   agentId: string,
   workspacePath: string,
   prompt: string,
+  supervisorSession: string,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return runOpenClaw(["agent", "--agent", agentId, "--message", prompt, "--json"], workspacePath);
-}
-
-/**
- * Build the canonical TOOLS.md content for a supervisor workspace.
- * Extracted so both startGoalSupervisor and wakeUpSupervisor stay in sync.
- */
-function buildToolsMd(
-  goal: { hive_id: string; project_id?: string | null },
-  goalId: string,
-): string {
-  const projectIdField = goal.project_id ? `, "projectId": "${goal.project_id}"` : "";
-  return `# Supervisor Tools
-
-You manage this goal by calling HiveWright's API at http://localhost:3002.
-Send Authorization: Bearer $INTERNAL_SERVICE_TOKEN on every request.
-Send X-HiveWright-Task-Id: $HIVEWRIGHT_TASK_ID on every write request.
-Send Content-Type: application/json on every POST/PUT.
-For every POST /api/goals or POST /api/tasks create, generate one UUID v4 idempotency key before the request, send it as Idempotency-Key, and reuse the same key if you retry the same create.
-Do not bypass the API with direct DB inserts or local markdown-only planning files.
-
-## Create Task
-POST /api/tasks
-Header: Idempotency-Key: <uuid-v4>
-Body: { "hiveId": "${goal.hive_id}", "assignedTo": "<role-slug>", "title": "...", "brief": "...", "goalId": "${goalId}", "sprintNumber": <n>, "qaRequired": true|false, "createdBy": "goal-supervisor"${projectIdField} }
-When creating replacement work for a failed or cancelled task, also include "sourceTaskId": "<failed-or-cancelled-task-uuid>". This links recovery work to the source task and enforces the recovery budget.
-${goal.project_id ? `\nIMPORTANT: This goal is associated with project ${goal.project_id}. Always include "projectId": "${goal.project_id}" in every task you create so code tasks run in the correct repository.\n` : ""}
-## Create Sub-Goal
-POST /api/goals
-Header: Idempotency-Key: <uuid-v4>
-Body: { "hiveId": "${goal.hive_id}", "title": "...", "description": "...", "parentId": "${goalId}" }
-
-## Create / Update Goal Plan
-PUT /api/goals/${goalId}/documents/plan
-Body: { "title": "<plan title>", "body": "<full markdown plan body>" }
-Use this to write the durable plan document for this goal. Calling again with a new body increments the revision counter.
-
-## Create Decision
-POST /api/decisions
-Body: { "hiveId": "${goal.hive_id}", "goalId": "${goalId}", "title": "...", "context": "...", "recommendation": "...", "options": [...], "priority": "normal" | "urgent" | "low" | "high", "autoApprove": true | false }
-Use autoApprove: true for Tier 2 decisions (act-and-flag); false for Tier 3 (pause-and-ask).
-
-## Create Schedule
-POST /api/schedules
-Body: { "hiveId": "${goal.hive_id}", "cronExpression": "<cron>", "taskTemplate": { "assignedTo": "<role>", "title": "...", "brief": "..." } }
-Use this to set up recurring work that should fire after this goal completes (e.g. weekly maintenance).
-
-## Mark Goal Achieved
-POST /api/goals/${goalId}/complete
-Body: { "summary": "<one-paragraph achievement summary>", "evidenceTaskIds": ["<task-uuid>", ...], "evidenceWorkProductIds": ["<wp-uuid>", ...] }
-Call this ONLY when every Success Criterion in the plan has been met and the required Evidence exists. Reference the supporting tasks/work products by UUID. Idempotent — calling twice returns the existing completion.
-
-## Query Memory
-GET /api/memory/search?hiveId=${goal.hive_id}&q=<search>
-
-## Available Roles
-GET /api/roles
-`;
+  return runOpenClaw(["agent", "--agent", agentId, "--message", prompt, "--json"], workspacePath, supervisorSession);
 }
 
 /**
@@ -171,7 +122,12 @@ export async function startGoalSupervisor(
   goalId: string,
 ): Promise<{ agentId: string; error?: string }> {
   // Get goal + hive info
-  const [goal] = await sql`SELECT id, hive_id, project_id, title FROM goals WHERE id = ${goalId}`;
+  const [goal] = await sql`
+    SELECT goals.id, goals.hive_id, goals.project_id, goals.title, projects.git_repo AS project_git_repo
+    FROM goals
+    LEFT JOIN projects ON projects.id = goals.project_id
+    WHERE goals.id = ${goalId}
+  `;
   if (!goal) return { agentId: "", error: "Goal not found" };
 
   const [biz] = await sql`SELECT slug, workspace_path FROM hives WHERE id = ${goal.hive_id}`;
@@ -181,6 +137,7 @@ export async function startGoalSupervisor(
   const bizSlug = biz?.slug as string || "default";
 
   const workspacePath = hiveGoalWorkspacePath(bizSlug, goalId);
+  const supervisorSession = workspacePath;
   const agentId = `hw-gs-${bizSlug}-${goalId.slice(0, 8)}`;
 
   // Ensure workspace
@@ -201,21 +158,21 @@ ${initialPrompt}
 - After creating sprint tasks, wait for them to complete. You'll receive a wake-up with results.
 `;
 
-  const toolsMd = buildToolsMd(goal as { hive_id: string; project_id?: string | null }, goalId);
+  const toolsMd = buildSupervisorToolsMd(goal as { hive_id: string; project_id?: string | null; project_git_repo?: boolean | null }, goalId);
 
   fs.writeFileSync(path.join(workspacePath, "AGENTS.md"), agentsMd, "utf-8");
   fs.writeFileSync(path.join(workspacePath, "TOOLS.md"), toolsMd, "utf-8");
 
-  const ensured = await ensureSupervisorAgent(agentId, workspacePath, primaryModel);
+  const ensured = await ensureSupervisorAgent(agentId, workspacePath, primaryModel, supervisorSession);
   if (!ensured.ok) {
     return { agentId, error: ensured.error || "Failed to provision supervisor agent" };
   }
 
   // Mark as started immediately — prevents re-triggering on the next lifecycle check
-  await sql`UPDATE goals SET session_id = ${workspacePath} WHERE id = ${goalId}`;
+  await sql`UPDATE goals SET session_id = ${supervisorSession} WHERE id = ${goalId}`;
 
   // Run the supervisor synchronously — blocks until complete or timeout
-  const runResult = await runSupervisorInWorkspace(agentId, workspacePath, initialPrompt);
+  const runResult = await runSupervisorInWorkspace(agentId, workspacePath, initialPrompt, supervisorSession);
 
   if (runResult.code !== 0) {
     console.warn(`[supervisor] openclaw agent run failed for goal ${goalId} (exit ${runResult.code}): ${runResult.stderr}`);
@@ -244,12 +201,18 @@ export async function wakeUpSupervisor(
   goalId: string,
   sprintNumber: number,
 ): Promise<{ success: boolean; output: string; error?: string }> {
-  const [goal] = await sql`SELECT session_id, hive_id, project_id FROM goals WHERE id = ${goalId}`;
+  const [goal] = await sql`
+    SELECT goals.session_id, goals.hive_id, goals.project_id, projects.git_repo AS project_git_repo
+    FROM goals
+    LEFT JOIN projects ON projects.id = goals.project_id
+    WHERE goals.id = ${goalId}
+  `;
   if (!goal?.session_id) return { success: false, output: "", error: "No supervisor session" };
 
   const [biz] = await sql`SELECT slug FROM hives WHERE id = ${goal.hive_id}`;
   const bizSlug = biz?.slug as string || "default";
   const workspacePath = hiveGoalWorkspacePath(bizSlug, goalId);
+  const supervisorSession = String(goal.session_id);
 
   const agentId = `hw-gs-${bizSlug}-${goalId.slice(0, 8)}`;
 
@@ -275,11 +238,11 @@ export async function wakeUpSupervisor(
   fs.writeFileSync(path.join(workspacePath, "AGENTS.md"), updatedAgents, "utf-8");
 
   // Regenerate TOOLS.md so the supervisor always sees current endpoints (prevents drift)
-  const toolsMd = buildToolsMd(goal as { hive_id: string; project_id?: string | null }, goalId);
+  const toolsMd = buildSupervisorToolsMd(goal as { hive_id: string; project_id?: string | null; project_git_repo?: boolean | null }, goalId);
   fs.writeFileSync(path.join(workspacePath, "TOOLS.md"), toolsMd, "utf-8");
 
   // Run the supervisor synchronously — blocks until complete or timeout
-  const runResult = await runSupervisorInWorkspace(agentId, workspacePath, wakeUpPrompt);
+  const runResult = await runSupervisorInWorkspace(agentId, workspacePath, wakeUpPrompt, supervisorSession);
 
   if (runResult.code !== 0) {
     return { success: false, output: runResult.stderr, error: `openclaw agent run failed (exit ${runResult.code}): ${runResult.stderr}` };

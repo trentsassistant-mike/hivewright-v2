@@ -16,7 +16,18 @@ import { goals } from "./goals";
  * goal has full history (the goals.status column is the current truth;
  * this table is the ledger). No uniqueness constraint on goal_id.
  *
- * `evidence` shape: { taskIds?: string[], workProductIds?: string[] }
+ * `evidence` shape:
+ * {
+ *   taskIds?: string[],
+ *   workProductIds?: string[],
+ *   bundle?: Array<{
+ *     type: string,
+ *     description: string,
+ *     reference?: string,
+ *     value?: unknown,
+ *     verified?: boolean
+ *   }>
+ * }
  * — referenced rows are NOT FK-validated at insert time (work_products in
  * particular may be soft-deleted before audit lookup). Evidence is for
  * provenance, not joinable foreign keys.
@@ -35,6 +46,7 @@ export const goalCompletions = pgTable(
       .notNull(),
     summary: text("summary").notNull(),
     evidence: jsonb("evidence").default({}).notNull(),
+    learningGate: jsonb("learning_gate").$type<Record<string, unknown>>().default({}).notNull(),
     createdBy: varchar("created_by", { length: 255 }).notNull(), // 'goal-supervisor' | 'owner' | 'system'
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },

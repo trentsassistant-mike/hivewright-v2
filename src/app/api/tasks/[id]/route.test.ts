@@ -94,6 +94,7 @@ describe("GET /api/tasks/[id]", () => {
     mockSql.mockResolvedValueOnce([taskRow]);
     mockSql.mockResolvedValueOnce([]);
     mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([]);
     mockCanAccessHive.mockResolvedValueOnce(true);
 
     const res = await GET(new Request("http://localhost/api/tasks/task-1"), params);
@@ -106,6 +107,7 @@ describe("GET /api/tasks/[id]", () => {
 
   it("includes image work product metadata and a safe download URL", async () => {
     mockSql.mockResolvedValueOnce([taskRow]);
+    mockSql.mockResolvedValueOnce([]);
     mockSql.mockResolvedValueOnce([]);
     mockSql.mockResolvedValueOnce([{
       id: "wp-1",
@@ -155,12 +157,13 @@ describe("GET /api/tasks/[id]", () => {
         adapterOverride: "codex",
         modelSlug: "openai-codex/gpt-5.5",
         modelProviderMismatchDetected: false,
-        cwd: "/home/example/hivewrightv2",
+        cwd: "/workspace/hivewrightv2",
         stderrTail: "failed to record rollout items",
         truncated: false,
         terminalEvents: [],
       }),
     }]);
+    mockSql.mockResolvedValueOnce([]);
     mockSql.mockResolvedValueOnce([]);
 
     const res = await GET(new Request("http://localhost/api/tasks/task-1"), params);
@@ -175,7 +178,7 @@ describe("GET /api/tasks/[id]", () => {
       adapterOverride: "codex",
       modelSlug: "openai-codex/gpt-5.5",
       modelProviderMismatchDetected: false,
-      cwd: "/home/example/hivewrightv2",
+      cwd: "/workspace/hivewrightv2",
       stderrTail: "failed to record rollout items",
       truncated: false,
     });
@@ -185,11 +188,83 @@ describe("GET /api/tasks/[id]", () => {
     mockSql.mockResolvedValueOnce([taskRow]);
     mockSql.mockResolvedValueOnce([]);
     mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([]);
 
     const res = await GET(new Request("http://localhost/api/tasks/task-1"), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
     expect(body.data.runtimeDiagnostics.codexEmptyOutput).toBeNull();
+  });
+
+  it("returns redacted retrieved context provenance from diagnostic task logs", async () => {
+    mockSql.mockResolvedValueOnce([taskRow]);
+    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([{
+      chunk: JSON.stringify({
+        kind: "task_context_provenance",
+        schemaVersion: 1,
+        status: "available",
+        entries: [
+          {
+            sourceClass: "role_memory",
+            reference: "role_memory:11111111-1111-1111-1111-111111111111",
+            sourceId: "11111111-1111-1111-1111-111111111111",
+            content: "secret memory content must be stripped",
+          },
+          {
+            sourceClass: "hive_memory",
+            reference: "hive_memory:22222222-2222-2222-2222-222222222222",
+            sourceId: "22222222-2222-2222-2222-222222222222",
+            category: "operations",
+            sourceTaskId: "33333333-3333-3333-3333-333333333333",
+          },
+        ],
+      }),
+    }]);
+    mockSql.mockResolvedValueOnce([]);
+
+    const res = await GET(new Request("http://localhost/api/tasks/task-1"), params);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.provenance).toEqual({
+      status: "available",
+      entries: [
+        {
+          sourceClass: "role_memory",
+          reference: "role_memory:11111111-1111-1111-1111-111111111111",
+          sourceId: "11111111-1111-1111-1111-111111111111",
+          sourceTaskId: null,
+          category: null,
+        },
+        {
+          sourceClass: "hive_memory",
+          reference: "hive_memory:22222222-2222-2222-2222-222222222222",
+          sourceId: "22222222-2222-2222-2222-222222222222",
+          sourceTaskId: "33333333-3333-3333-3333-333333333333",
+          category: "operations",
+        },
+      ],
+      disclaimer: expect.stringContaining("not model-internal reasoning"),
+    });
+    expect(JSON.stringify(body.data.provenance)).not.toContain("secret memory content");
+  });
+
+  it("returns an explicit unavailable provenance state when no provenance row exists", async () => {
+    mockSql.mockResolvedValueOnce([taskRow]);
+    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([]);
+
+    const res = await GET(new Request("http://localhost/api/tasks/task-1"), params);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.provenance).toEqual({
+      status: "unavailable",
+      entries: [],
+      disclaimer: expect.stringContaining("not model-internal reasoning"),
+    });
   });
 });

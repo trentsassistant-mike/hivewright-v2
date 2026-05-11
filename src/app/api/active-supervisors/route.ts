@@ -1,5 +1,4 @@
 import fs from "fs";
-import os from "os";
 import path from "path";
 import { sql } from "../_lib/db";
 import { jsonOk, jsonError } from "../_lib/responses";
@@ -28,7 +27,7 @@ type GoalRow = {
   created_at: Date;
 };
 
-const SESSIONS_DIR = path.join(process.env.HOME ?? os.homedir(), ".codex", "sessions");
+const SESSIONS_DIR = `${process.env.HOME ?? "/home/hivewright"}/.codex/sessions`;
 
 function readThreadId(workspacePath: string): string | null {
   try {

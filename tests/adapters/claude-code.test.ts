@@ -345,7 +345,7 @@ describe("ClaudeCodeAdapter", () => {
       expect(mockSpawn.mock.calls[0][2].cwd).toBe("/repo/base");
     });
 
-    it("derives spawn cwd from session context and never hardcodes /home/example/hivewrightv2", async () => {
+    it("derives spawn cwd from session context and never hardcodes /workspace/hivewrightv2", async () => {
       mockSuccessfulSpawn();
       const uniqueBase = "/var/tmp/synthetic-hive-root";
       const uniqueWorktree = "/var/tmp/synthetic-hive-root/.claude/worktrees/regression-task";
@@ -369,9 +369,9 @@ describe("ClaudeCodeAdapter", () => {
       expect(mockSpawn).toHaveBeenCalledTimes(1);
       const spawnedCwd = mockSpawn.mock.calls[0][2].cwd as string;
       expect(spawnedCwd).toBe(uniqueWorktree);
-      expect(spawnedCwd).not.toContain("/home/example/hivewrightv2");
+      expect(spawnedCwd).not.toContain("/workspace/hivewrightv2");
       expect(resolveClaudeCodeWorkspace(ctx)).toBe(uniqueWorktree);
-      expect(resolveClaudeCodeWorkspace(ctx)).not.toContain("/home/example/hivewrightv2");
+      expect(resolveClaudeCodeWorkspace(ctx)).not.toContain("/workspace/hivewrightv2");
       expect(ctx.baseProjectWorkspace).toBe(uniqueBase);
       expect(ctx.worktreeContext?.baseWorkspace).toBe(uniqueBase);
     });

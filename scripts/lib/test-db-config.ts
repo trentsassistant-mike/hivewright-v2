@@ -12,7 +12,7 @@ export type TestDatabaseConfig = {
 
 type TestDatabaseEnv = Record<string, string | undefined>;
 
-export const TEST_DB_NAME_PREFIX = "hivewright_test";
+export const TEST_DB_NAME_PREFIX = "hivewrightv2_test";
 
 function databaseNameFromUrl(url: string) {
   return decodeURIComponent(new URL(url).pathname.replace(/^\//, ""));

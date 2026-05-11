@@ -5,6 +5,7 @@ import {
   buildCodexEmptyOutputDiagnostic,
   CodexAdapter,
   collectCodexAgentTexts,
+  collectCodexFinalAgentText,
   isCodexRolloutRegistrationFailure,
 } from "@/adapters/codex";
 import type { SessionContext } from "@/adapters/types";
@@ -158,6 +159,16 @@ describe("collectCodexAgentTexts", () => {
       "codex_core::session: failed to record rollout items: thread 019dd0b1-0f3a-7313-b737-93d8967819fb not found",
     )).toBe(true);
   });
+
+  it("returns only the final agent message for persisted task output", () => {
+    const rawStdout = [
+      JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "I’m checking the files and tools first." } }),
+      JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "Final deliverable: wrote the blog outline and verified the file." } }),
+      JSON.stringify({ type: "turn.completed", usage: { input_tokens: 100, output_tokens: 25 } }),
+    ].join("\n");
+
+    expect(collectCodexFinalAgentText(rawStdout)).toBe("Final deliverable: wrote the blog outline and verified the file.");
+  });
 });
 
 describe("CodexAdapter.translate + buildCommand", () => {
@@ -182,6 +193,8 @@ describe("CodexAdapter.translate + buildCommand", () => {
       standingInstructions: [],
       goalContext: null,
       projectWorkspace: "/tmp/test-workspace",
+      gitBackedProject: true,
+      hiveWorkspacePath: "/tmp/business-workspace",
       hiveSlug: "test-hive",
       model: "openai-codex/gpt-5.4",
       fallbackModel: null,
@@ -202,6 +215,30 @@ describe("CodexAdapter.translate + buildCommand", () => {
     const cIdx = args.indexOf("-C");
     expect(cIdx).toBeGreaterThanOrEqual(0);
     expect(args[cIdx + 1]).toBe("/tmp/test-workspace");
+  });
+
+  it("uses a clean dispatcher-owned workspace for non-git business tasks", () => {
+    const adapter = new CodexAdapter();
+    const ctx = makeCtx();
+    ctx.gitBackedProject = false;
+    ctx.projectWorkspace = "/tmp/business-workspace-with-historical-agents";
+    ctx.hiveWorkspacePath = "/tmp/business-workspace-with-historical-agents";
+
+    const args = adapter.buildCommand(ctx);
+    const cIdx = args.indexOf("-C");
+
+    expect(cIdx).toBeGreaterThanOrEqual(0);
+    expect(args[cIdx + 1]).toMatch(/\.hivewright\/task-workspaces\/t-1$/);
+    expect(args[cIdx + 1]).not.toBe("/tmp/business-workspace-with-historical-agents");
+  });
+
+  it("injects output-discipline instructions so persisted results do not become tool chatter", () => {
+    const adapter = new CodexAdapter();
+    const prompt = adapter.translate(makeCtx());
+
+    expect(prompt).toContain("## Output Discipline");
+    expect(prompt).toContain("Do not narrate tool usage");
+    expect(prompt).toContain("shown on the owner dashboard");
   });
 
   it("treats openai-codex/gpt-5.5 as an internal alias and passes gpt-5.5 through to codex", () => {
@@ -467,7 +504,7 @@ describe("CodexAdapter.translate + buildCommand", () => {
             "OPENAI_API_KEY=sk-livecredential123456",
             "Authorization: Bearer abc.def.ghi",
             "Cookie: session=secret",
-            "/home/example/.codex/auth.json",
+            "/home/hivewright/.codex/auth.json",
             "/tmp/test-workspace/src/app.ts",
           ].join(" "),
         },
@@ -476,7 +513,7 @@ describe("CodexAdapter.translate + buildCommand", () => {
         "failed to record rollout items: thread thread-1 not found",
         "GH_TOKEN=githubtoken123",
         "PASSWORD=hunter2",
-        "/home/example/.ssh/id_rsa",
+        "/home/hivewright/.ssh/id_rsa",
         "/tmp/test-workspace/package.json",
       ].join("\n"),
       exitCode: 1,
@@ -484,7 +521,7 @@ describe("CodexAdapter.translate + buildCommand", () => {
       adapterOverride: "codex",
       modelSlug: "openai-codex/gpt-5.5",
       modelProviderMismatchDetected: false,
-      cwd: "/home/example/outside-repo",
+      cwd: "/home/hivewright/outside-repo",
       taskWorkspace: "/tmp/test-workspace",
       rolloutSignaturePresent: true,
     });
@@ -501,7 +538,7 @@ describe("CodexAdapter.translate + buildCommand", () => {
     expect(serialized).not.toContain("hunter2");
     expect(serialized).not.toContain("Bearer abc.def.ghi");
     expect(serialized).not.toContain("session=secret");
-    expect(serialized).not.toContain("/home/example/.ssh/id_rsa");
+    expect(serialized).not.toContain("/home/hivewright/.ssh/id_rsa");
   });
 
   it("caps codex empty-output diagnostics at 8192 bytes with explicit truncation marker", () => {

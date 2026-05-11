@@ -43,8 +43,7 @@ The transcription is printed to stdout. All errors go to stderr.
 
 Whisper API pricing: **$0.006 per minute** of audio.
 
-Every call is logged to
-`${HIVEWRIGHT_VOICE_TRANSCRIPTION_COST_LOG:-$HIVEWRIGHT_DATA_HOME/logs/voice-transcription-cost.log}`.
+Every call is logged to `$HOME/hivewright/logs/voice-transcription-cost.log`.
 
 ## Error Codes
 
@@ -60,6 +59,6 @@ Every call is logged to
 
 ## Log Location
 
-`${HIVEWRIGHT_VOICE_TRANSCRIPTION_COST_LOG:-$HIVEWRIGHT_DATA_HOME/logs/voice-transcription-cost.log}`
+`$HOME/hivewright/logs/voice-transcription-cost.log`
 
 Each line: `YYYY-MM-DD HH:MM:SS | file=<basename> | size=<bytes>B | model=whisper-1 | cost=~$0.001-0.006`

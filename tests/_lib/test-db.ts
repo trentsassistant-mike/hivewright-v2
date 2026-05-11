@@ -26,7 +26,7 @@ import postgres from "postgres";
 import { invalidateAll as invalidateProvisionCache } from "../../src/provisioning/status-cache";
 import { syncRoleLibrary } from "../../src/roles/sync";
 
-const TEST_DB_NAME_PREFIX = "hivewright_test";
+const TEST_DB_NAME_PREFIX = "hivewrightv2_test";
 const SOURCE_VAR = process.env.TEST_DATABASE_URL
   ? "TEST_DATABASE_URL"
   : process.env.DATABASE_URL

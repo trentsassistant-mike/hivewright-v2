@@ -9,6 +9,7 @@ export * from "./hive-runtime-locks";
 export * from "./projects";
 export * from "./role-templates";
 export * from "./tasks";
+export * from "./pipelines";
 export * from "./goals";
 export * from "./goal-documents";
 export * from "./goal-completions";

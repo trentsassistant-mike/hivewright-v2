@@ -41,7 +41,7 @@ beforeEach(async () => {
 });
 
 afterAll(() => {
-  const dir = "/home/example/hives/test-biz-attachments";
+  const dir = "$HOME/hives/test-biz-attachments";
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
 });
 

@@ -5,8 +5,9 @@ import { sql } from "../../../_lib/db";
 import { requireSystemOwner } from "../../../_lib/auth";
 import { resolveHiveWorkspaceRoot } from "@/hives/workspace-root";
 
-// Session presence is enforced by src/proxy.ts middleware. On top of that,
-// this handler adds the per-handler ownership gate: only the
+// Session presence is enforced by src/proxy.ts middleware (see
+// docs/security/2026-04-22-middleware-gating-verification.md). On top of
+// that, this handler adds the per-handler ownership gate: only the
 // dashboard system owner (users.is_system_owner = true) may download
 // attachments. The schema has no per-user owner column on task_attachments,
 // tasks, or goals — tasks.created_by stores role slugs ("owner", "ea",

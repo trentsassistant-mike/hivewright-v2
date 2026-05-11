@@ -1,13 +1,19 @@
 import { sql } from "../../../_lib/db";
 import { jsonOk, jsonError } from "../../../_lib/responses";
-import { requireApiUser } from "../../../_lib/auth";
-import { completeGoal, parseGoalCompletionStatus } from "@/goals/completion";
+import { isInternalServiceAccountUser, requireApiUser } from "../../../_lib/auth";
+import { completeGoal, parseCompletionEvidenceBundle, parseGoalCompletionStatus } from "@/goals/completion";
+import { parseLearningGateResult } from "@/goals/outcome-records";
 
 interface CompleteGoalBody {
   summary?: unknown;
   evidenceTaskIds?: unknown;
   evidenceWorkProductIds?: unknown;
+  evidence?: unknown;
+  evidenceBundle?: unknown;
+  evidence_bundle?: unknown;
   createdBy?: unknown;
+  learningGate?: unknown;
+  learning_gate?: unknown;
   completionStatus?: unknown;
   completion_status?: unknown;
 }
@@ -16,10 +22,15 @@ function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === "string");
 }
 
+function hasNonEmptyStringArray(v: unknown): v is string[] {
+  return isStringArray(v) && v.length > 0;
+}
+
 // Per-handler authorization (audit d20f7b46): the supervisor session that
 // owns the goal (goals.session_id, a workspace path assigned by the
 // dispatcher) is the only principal allowed to mark the goal achieved.
-// System owners can override for manual completion via the dashboard.
+// Human system owners can override for manual completion via the dashboard;
+// internal service-account callers still need supervisor-session proof.
 // Supervisors assert their session by sending `X-Supervisor-Session` with
 // the workspace path they were launched in; a mismatch against the stored
 // goals.session_id is 403. This is stricter than session presence but does
@@ -53,16 +64,39 @@ export async function POST(
     if (body.evidenceWorkProductIds !== undefined && !isStringArray(body.evidenceWorkProductIds)) {
       return jsonError("'evidenceWorkProductIds' must be an array of strings", 400);
     }
+    const evidenceInput = body.evidence ?? body.evidenceBundle ?? body.evidence_bundle;
+    const evidenceBundle = evidenceInput === undefined
+      ? undefined
+      : parseCompletionEvidenceBundle(evidenceInput);
+    if (evidenceBundle && !evidenceBundle.ok) {
+      return jsonError(evidenceBundle.error, 400);
+    }
+    if (
+      !hasNonEmptyStringArray(body.evidenceTaskIds) &&
+      !hasNonEmptyStringArray(body.evidenceWorkProductIds) &&
+      !evidenceBundle?.ok
+    ) {
+      return jsonError(
+        "'evidence' is required: provide a non-empty evidence bundle, evidenceTaskIds, or evidenceWorkProductIds",
+        400,
+      );
+    }
     if (body.createdBy !== undefined) {
       if (typeof body.createdBy !== "string" || body.createdBy.trim().length === 0) {
         return jsonError("'createdBy' must be a non-empty string when provided", 400);
       }
     }
-
+    if (body.learningGate === undefined && body.learning_gate === undefined) {
+      return jsonError("'learningGate' is required and must record the completion learning gate", 400);
+    }
+    const learningGate = parseLearningGateResult(body.learningGate ?? body.learning_gate);
+    if (!learningGate.ok) {
+      return jsonError(learningGate.error, 400);
+    }
     const completionStatusInput = body.completionStatus ?? body.completion_status;
     const completionStatus = parseGoalCompletionStatus(completionStatusInput);
     if (completionStatusInput !== undefined && !completionStatus) {
-      return jsonError("'completionStatus' must be one of achieved, execution_ready, blocked_on_owner_channel", 400);
+      return jsonError("'completionStatus' must be achieved, execution_ready, or blocked_on_owner_channel", 400);
     }
 
     const [goal] = await sql`
@@ -72,7 +106,7 @@ export async function POST(
       return jsonError("Goal not found", 404);
     }
 
-    if (!authz.user.isSystemOwner) {
+    if (!authz.user.isSystemOwner || isInternalServiceAccountUser(authz.user)) {
       const callerSession = request.headers.get("x-supervisor-session")?.trim() ?? "";
       if (!callerSession || callerSession !== goal.session_id) {
         return jsonError(
@@ -85,21 +119,20 @@ export async function POST(
     // Cancelled, paused, and any other non-completable terminal/transitional
     // states reject with 409 Conflict. A stale supervisor that hasn't received
     // an out-of-band cancellation should not be able to resurrect the goal as
-    // achieved. Only 'active' goals proceed to completion; 'achieved' goals
+    // achieved. Only 'active' goals proceed to completion; final outcome states
     // hit the idempotent branch below.
-    const finalStatuses = ["achieved", "execution_ready", "blocked_on_owner_channel"];
-    if (goal.status !== "active" && !finalStatuses.includes(goal.status as string)) {
+    if (goal.status !== "active" && !["achieved", "execution_ready", "blocked_on_owner_channel"].includes(goal.status)) {
       return jsonError(
         `Goal cannot be completed: current status is '${goal.status}'`,
         409,
       );
     }
 
-    // Idempotency: already-achieved goals return current state without
+    // Idempotency: already-final goals return current state without
     // re-running completeGoal (avoids double memory writes + double notifications).
-    if (finalStatuses.includes(goal.status as string)) {
+    if (["achieved", "execution_ready", "blocked_on_owner_channel"].includes(goal.status)) {
       const [latestCompletion] = await sql`
-        SELECT id, summary, evidence, created_by, created_at
+        SELECT id, summary, evidence, learning_gate, created_by, created_at
         FROM goal_completions
         WHERE goal_id = ${id}
         ORDER BY created_at DESC
@@ -119,6 +152,8 @@ export async function POST(
       evidenceWorkProductIds: isStringArray(body.evidenceWorkProductIds)
         ? body.evidenceWorkProductIds
         : undefined,
+      evidenceBundle: evidenceBundle?.ok ? evidenceBundle.items : undefined,
+      learningGate: learningGate.result,
       ...(completionStatus ? { completionStatus } : {}),
     });
 
@@ -126,7 +161,7 @@ export async function POST(
     // with the idempotent branch (single contract for clients regardless of
     // whether the call was the first or a duplicate).
     const [latestCompletion] = await sql`
-      SELECT id, summary, evidence, created_by, created_at
+      SELECT id, summary, evidence, learning_gate, created_by, created_at
       FROM goal_completions
       WHERE goal_id = ${id}
       ORDER BY created_at DESC
