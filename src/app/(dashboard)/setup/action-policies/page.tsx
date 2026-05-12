@@ -21,6 +21,8 @@ type Policy = {
   conditions: Record<string, unknown>;
 };
 
+type RiskTier = "low" | "medium" | "high" | "critical";
+
 type ConnectorOperation = {
   slug: string;
   label: string;
@@ -39,6 +41,7 @@ type Connector = {
 
 const DECISIONS: Decision[] = ["allow", "require_approval", "block"];
 const EFFECT_TYPES: EffectType[] = ["read", "notify", "write", "financial", "destructive", "system"];
+const RISK_TIERS: RiskTier[] = ["low", "medium", "high", "critical"];
 
 export default function ActionPoliciesPage() {
   const { selected } = useHiveContext();
@@ -88,6 +91,16 @@ export default function ActionPoliciesPage() {
 
   function updatePolicy(index: number, patch: Partial<Policy>) {
     setPolicies((current) => current.map((policy, i) => (i === index ? { ...policy, ...patch } : policy)));
+  }
+
+  function updatePolicyConditions(index: number, patch: Record<string, unknown>) {
+    setPolicies((current) => current.map((policy, i) => {
+      if (i !== index) return policy;
+      return {
+        ...policy,
+        conditions: compactConditions({ ...policy.conditions, ...patch }),
+      };
+    }));
   }
 
   function addPolicy() {
@@ -290,6 +303,113 @@ export default function ActionPoliciesPage() {
                 />
               </label>
 
+              <div className="mt-4 rounded-md border border-zinc-100 p-3 dark:border-zinc-800">
+                <h3 className="text-sm font-semibold">Conditions</h3>
+                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <label className="space-y-1 text-sm">
+                    <span className="font-medium">Max amount</span>
+                    <input
+                      aria-label="Max amount"
+                      type="number"
+                      value={typeof policy.conditions.maxAmount === "number" ? policy.conditions.maxAmount : ""}
+                      onChange={(event) => updatePolicyConditions(index, {
+                        maxAmount: event.target.value === "" ? undefined : Number(event.target.value),
+                      })}
+                      className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+                    />
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="font-medium">Amount field</span>
+                    <input
+                      aria-label="Amount field"
+                      value={stringCondition(policy.conditions.amountField)}
+                      onChange={(event) => updatePolicyConditions(index, { amountField: event.target.value })}
+                      placeholder="amount"
+                      className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+                    />
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="font-medium">Destination field</span>
+                    <input
+                      aria-label="Destination field"
+                      value={stringCondition(policy.conditions.destinationField)}
+                      onChange={(event) => updatePolicyConditions(index, { destinationField: event.target.value })}
+                      placeholder="to"
+                      className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+                    />
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="font-medium">Risk tier at most</span>
+                    <select
+                      aria-label="Risk tier at most"
+                      value={stringCondition(policy.conditions.riskTierAtMost)}
+                      onChange={(event) => updatePolicyConditions(index, { riskTierAtMost: event.target.value || undefined })}
+                      className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+                    >
+                      <option value="">Any risk</option>
+                      {RISK_TIERS.map((riskTier) => <option key={riskTier} value={riskTier}>{riskTier}</option>)}
+                    </select>
+                  </label>
+                  <label className="space-y-1 text-sm md:col-span-2">
+                    <span className="font-medium">Allowed domains</span>
+                    <textarea
+                      aria-label="Allowed domains"
+                      rows={2}
+                      value={listCondition(policy.conditions.allowedDomains)}
+                      onChange={(event) => updatePolicyConditions(index, { allowedDomains: lines(event.target.value) })}
+                      placeholder="example.com"
+                      className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+                    />
+                  </label>
+                  <label className="space-y-1 text-sm md:col-span-2">
+                    <span className="font-medium">Allowed destinations</span>
+                    <textarea
+                      aria-label="Allowed destinations"
+                      rows={2}
+                      value={listCondition(policy.conditions.allowedDestinations)}
+                      onChange={(event) => updatePolicyConditions(index, { allowedDestinations: lines(event.target.value) })}
+                      placeholder="ops@example.com"
+                      className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      aria-label="Business hours only"
+                      type="checkbox"
+                      checked={policy.conditions.businessHoursOnly === true}
+                      onChange={(event) => updatePolicyConditions(index, { businessHoursOnly: event.target.checked ? true : undefined })}
+                    />
+                    Business hours only
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      aria-label="Require dry run"
+                      type="checkbox"
+                      checked={policy.conditions.requireDryRun === true}
+                      onChange={(event) => updatePolicyConditions(index, { requireDryRun: event.target.checked ? true : undefined })}
+                    />
+                    Require dry run
+                  </label>
+                </div>
+                <label className="mt-3 block space-y-1 text-sm">
+                  <span className="font-medium">Advanced JSON</span>
+                  <textarea
+                    aria-label="Advanced conditions JSON"
+                    rows={3}
+                    value={JSON.stringify(policy.conditions, null, 2)}
+                    onChange={(event) => {
+                      try {
+                        const parsed = JSON.parse(event.target.value) as Record<string, unknown>;
+                        updatePolicy(index, { conditions: parsed });
+                      } catch {
+                        updatePolicy(index, { conditions: policy.conditions });
+                      }
+                    }}
+                    className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 font-mono text-xs dark:border-zinc-800 dark:bg-zinc-900"
+                  />
+                </label>
+              </div>
+
               {selectedOperation ? (
                 <p className="mt-3 text-xs text-zinc-500">
                   {selectedOperation.label}: {selectedOperation.governance.effectType} · default {selectedOperation.governance.defaultDecision}
@@ -330,6 +450,26 @@ export default function ActionPoliciesPage() {
       </section>
     </div>
   );
+}
+
+function compactConditions(conditions: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(conditions).filter(([, value]) => {
+    if (value === undefined || value === null || value === "") return false;
+    if (Array.isArray(value)) return value.length > 0;
+    return true;
+  }));
+}
+
+function stringCondition(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function listCondition(value: unknown): string {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "string").join("\n") : "";
+}
+
+function lines(value: string): string[] {
+  return value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
 }
 
 function Header() {

@@ -80,7 +80,7 @@ describe("/api/action-policies", () => {
       hiveId,
       policies: [
         {
-          name: "Allow read operations",
+          name: "Allow low-risk read operations",
           enabled: true,
           connectorSlug: null,
           operation: null,
@@ -89,7 +89,10 @@ describe("/api/action-policies", () => {
           decision: "allow",
           priority: 10,
           reason: null,
-          conditions: {},
+          conditions: {
+            riskTierAtMost: "low",
+            businessHoursOnly: true,
+          },
         },
         {
           name: "Block dangerous role action",
@@ -110,7 +113,7 @@ describe("/api/action-policies", () => {
     const body = await res.json();
     expect(body.data.policies.map((policy: { name: string }) => policy.name)).toEqual([
       "Block dangerous role action",
-      "Allow read operations",
+      "Allow low-risk read operations",
     ]);
 
     const rows = await sql<{ name: string; connector: string | null; operation: string | null; effect: string; priority: number }[]>`
@@ -128,7 +131,7 @@ describe("/api/action-policies", () => {
         priority: 99,
       },
       {
-        name: "Allow read operations",
+        name: "Allow low-risk read operations",
         connector: null,
         operation: null,
         effect: "allow",
@@ -137,7 +140,7 @@ describe("/api/action-policies", () => {
     ]);
   });
 
-  it("rejects invalid enum values and non-object conditions", async () => {
+  it("rejects invalid enum values and invalid condition fields", async () => {
     const hiveId = await seedHive();
 
     const invalidDecision = await PATCH(patchReq({
@@ -190,5 +193,22 @@ describe("/api/action-policies", () => {
       }],
     }));
     expect(unsupportedConditions.status).toBe(400);
+
+    const invalidConditionType = await PATCH(patchReq({
+      hiveId,
+      policies: [{
+        name: "Bad condition type",
+        enabled: true,
+        connectorSlug: null,
+        operation: null,
+        effectType: null,
+        roleSlug: null,
+        decision: "allow",
+        priority: 0,
+        reason: null,
+        conditions: { allowedDomains: "example.com" },
+      }],
+    }));
+    expect(invalidConditionType.status).toBe(400);
   });
 });

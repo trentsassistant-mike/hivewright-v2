@@ -1,4 +1,4 @@
-import { invokeConnector } from "@/connectors/runtime";
+import { canonicalConnectorPayloadHash, executeApprovedConnectorAction, type InvokeResult } from "@/connectors/runtime";
 import { getConnectorDefinition } from "@/connectors/registry";
 import { decrypt, encrypt } from "@/credentials/encryption";
 import { evaluateActionPolicy, loadActionPoliciesForHive, type ActionPolicySql } from "./policy";
@@ -83,6 +83,8 @@ interface ExternalActionRequestRow {
   policy_snapshot: Record<string, unknown>;
   execution_metadata?: Record<string, unknown> | null;
   encrypted_execution_payload?: string | null;
+  request_payload_hash?: string | null;
+  operation_risk_tier?: string | null;
   error_message?: string | null;
 }
 
@@ -187,12 +189,14 @@ async function insertExternalActionRequest(
   input: RequestExternalActionInput,
   connectorSlug: string,
   effectType: string,
+  riskTier: string | undefined,
   decision: RequestExternalActionResult["policyDecision"],
   policyReason: string,
   policyId?: string,
 ): Promise<ExternalActionRequestRow> {
   const roleSlug = actorRoleSlug(input.actor);
   const requestPayload = redactActionPayload({ args: input.args ?? {} });
+  const requestPayloadHash = canonicalConnectorPayloadHash(input.args ?? {});
   const policySnapshot = {
     decision,
     reason: policyReason,
@@ -222,6 +226,8 @@ async function insertExternalActionRequest(
       role_slug,
       state,
       idempotency_key,
+      request_payload_hash,
+      operation_risk_tier,
       request_payload,
       policy_id,
       policy_snapshot,
@@ -237,6 +243,8 @@ async function insertExternalActionRequest(
       ${roleSlug},
       ${initialState},
       ${input.idempotencyKey ?? null},
+      ${requestPayloadHash},
+      ${riskTier ?? null},
       ${sql.json(requestPayload as never)},
       ${policyId ?? null}::uuid,
       ${sql.json(policySnapshot as never)},
@@ -258,7 +266,7 @@ async function insertExternalActionRequest(
 async function updateExecutionResult(
   sql: ExternalActionSql,
   requestId: string,
-  result: Awaited<ReturnType<typeof invokeConnector>>,
+  result: InvokeResult,
 ): Promise<ExternalActionRequestRow> {
   const state: ExternalActionStatus = result.success ? "succeeded" : "failed";
   const responsePayload = redactActionPayload(
@@ -342,11 +350,19 @@ async function executeRequestRow(
   }
 
   try {
-    const result = await invokeConnector(sql as never, {
+    const approvedHash = row.request_payload_hash;
+    const executionHash = canonicalConnectorPayloadHash(args);
+    if (approvedHash && approvedHash !== executionHash) {
+      throw new Error(`external action request ${row.id} payload hash mismatch`);
+    }
+
+    const result = await executeApprovedConnectorAction(sql as never, {
       installId,
       operation: row.operation,
       args,
       actor: actorLabel(actor),
+      approvedExternalActionRequestId: row.id,
+      idempotencyKey: row.idempotency_key ?? null,
     });
     const updated = await updateExecutionResult(sql, row.id, result);
     return {
@@ -403,6 +419,7 @@ export async function requestExternalAction(
     defaultDecision: operation.governance.defaultDecision,
     actorRoleSlug: actorRoleSlug(input.actor),
     args: input.args,
+    riskTier: operation.governance.riskTier,
     policies,
   });
 
@@ -413,6 +430,7 @@ export async function requestExternalAction(
         input,
         definition.slug,
         operation.governance.effectType,
+        operation.governance.riskTier,
         policy.decision,
         policy.reason,
         policy.policyId,
@@ -473,6 +491,7 @@ export async function requestExternalAction(
     input,
     definition.slug,
     operation.governance.effectType,
+    operation.governance.riskTier,
     policy.decision,
     policy.reason,
     policy.policyId,

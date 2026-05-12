@@ -4,11 +4,12 @@ import {
   rejectExternalAction,
   requestExternalAction,
 } from "@/actions/external-actions";
-import { invokeConnector, type InvokeResult } from "@/connectors/runtime";
+import { canonicalConnectorPayloadHash, executeApprovedConnectorAction, type InvokeResult } from "@/connectors/runtime";
 import type { ExternalActionSql } from "@/actions/external-actions";
 
 vi.mock("@/connectors/runtime", () => ({
-  invokeConnector: vi.fn(),
+  canonicalConnectorPayloadHash: vi.fn((args: Record<string, unknown> = {}) => `hash:${JSON.stringify(args)}`),
+  executeApprovedConnectorAction: vi.fn(),
 }));
 
 type RequestRow = Record<string, unknown>;
@@ -53,12 +54,14 @@ class FakeSql {
         role_slug: values[5],
         state: values[6],
         idempotency_key: values[7],
-        request_payload: values[8],
-        policy_id: values[9],
-        policy_snapshot: values[10],
-        execution_metadata: values[11],
-        encrypted_execution_payload: values[12],
-        requested_by: values[13],
+        request_payload_hash: values[8],
+        operation_risk_tier: values[9],
+        request_payload: values[10],
+        policy_id: values[11],
+        policy_snapshot: values[12],
+        execution_metadata: values[13],
+        encrypted_execution_payload: values[14],
+        requested_by: values[15],
         decision_id: null,
         response_payload: {},
         error_message: null,
@@ -133,6 +136,16 @@ class FakeSql {
       return [row];
     }
 
+    if (query.startsWith("UPDATE external_action_requests") && query.includes("SET state = 'failed'") && query.includes("response_payload = ?")) {
+      const [responsePayload, errorMessage, requestId] = values;
+      const row = this.requests.get(String(requestId));
+      if (!row) return [];
+      row.state = "failed";
+      row.response_payload = responsePayload;
+      row.error_message = errorMessage;
+      return [row];
+    }
+
     throw new Error(`Unhandled SQL: ${query}`);
   };
 
@@ -168,8 +181,8 @@ function baseInput(overrides: Record<string, unknown> = {}) {
 describe("external action service", () => {
   beforeEach(() => {
     process.env.ENCRYPTION_KEY = "external-action-test-key";
-    vi.mocked(invokeConnector).mockReset();
-    vi.mocked(invokeConnector).mockResolvedValue({ success: true, data: { ok: true, secret: "hide" }, durationMs: 5 });
+    vi.mocked(executeApprovedConnectorAction).mockReset();
+    vi.mocked(executeApprovedConnectorAction).mockResolvedValue({ success: true, data: { ok: true, secret: "hide" }, durationMs: 5 });
   });
 
   it("blocks requests without invoking the connector and records redacted payloads", async () => {
@@ -179,9 +192,10 @@ describe("external action service", () => {
     const result = await requestExternalAction(fake.tag as unknown as ExternalActionSql, baseInput());
 
     expect(result.status).toBe("blocked");
-    expect(invokeConnector).not.toHaveBeenCalled();
+    expect(executeApprovedConnectorAction).not.toHaveBeenCalled();
     const row = fake.requests.get(result.requestId)!;
     expect(row.state).toBe("blocked");
+    expect(row.request_payload_hash).toBe(`hash:${JSON.stringify(baseInput().args)}`);
     const requestPayload = row.request_payload as { args: Record<string, unknown> };
     expect(requestPayload.args).toEqual({
       payload: { message: "hello", token: "[REDACTED]" },
@@ -195,7 +209,7 @@ describe("external action service", () => {
     const result = await requestExternalAction(fake.tag as unknown as ExternalActionSql, baseInput());
 
     expect(result.status).toBe("awaiting_approval");
-    expect(invokeConnector).not.toHaveBeenCalled();
+    expect(executeApprovedConnectorAction).not.toHaveBeenCalled();
     expect(result.decisionId).toBe("decision-1");
     expect(fake.decisions.get("decision-1")?.kind).toBe("external_action_approval");
     const routeMetadata = fake.decisions.get("decision-1")?.route_metadata as { externalActionRequestId: string };
@@ -203,6 +217,7 @@ describe("external action service", () => {
     expect(fake.requests.get(result.requestId)?.decision_id).toBe("decision-1");
     const row = fake.requests.get(result.requestId)!;
     expect(row.policy_id).toBeNull();
+    expect(row.request_payload_hash).toBe(`hash:${JSON.stringify(baseInput().args)}`);
     expect(row.encrypted_execution_payload).toEqual(expect.any(String));
     expect((row.request_payload as { args: Record<string, unknown> }).args.authHeader).toBe("[REDACTED]");
   });
@@ -214,8 +229,8 @@ describe("external action service", () => {
     const result = await requestExternalAction(fake.tag as unknown as ExternalActionSql, baseInput({ idempotencyKey: "once" }));
 
     expect(result.status).toBe("succeeded");
-    expect(invokeConnector).toHaveBeenCalledTimes(1);
-    expect(invokeConnector).toHaveBeenCalledWith(fake.tag, expect.objectContaining({
+    expect(executeApprovedConnectorAction).toHaveBeenCalledTimes(1);
+    expect(executeApprovedConnectorAction).toHaveBeenCalledWith(fake.tag, expect.objectContaining({
       installId,
       operation: "post_json",
       args: { payload: { message: "hello", token: "secret-token" }, authHeader: "Bearer secret" },
@@ -224,7 +239,7 @@ describe("external action service", () => {
 
     const again = await requestExternalAction(fake.tag as unknown as ExternalActionSql, baseInput({ idempotencyKey: "once" }));
     expect(again.requestId).toBe(result.requestId);
-    expect(invokeConnector).toHaveBeenCalledTimes(1);
+    expect(executeApprovedConnectorAction).toHaveBeenCalledTimes(1);
   });
 
   it("executes an approved request once even when called twice", async () => {
@@ -239,12 +254,29 @@ describe("external action service", () => {
 
     expect(first.status).toBe("succeeded");
     expect(second.status).toBe("succeeded");
-    expect(invokeConnector).toHaveBeenCalledTimes(1);
-    expect(invokeConnector).toHaveBeenCalledWith(fake.tag, expect.objectContaining({
+    expect(executeApprovedConnectorAction).toHaveBeenCalledTimes(1);
+    expect(executeApprovedConnectorAction).toHaveBeenCalledWith(fake.tag, expect.objectContaining({
       installId,
       operation: "post_json",
       args: { payload: { message: "hello", token: "secret-token" }, authHeader: "Bearer secret" },
     }));
+  });
+
+  it("fails approved execution if the stored payload hash does not match decrypted args", async () => {
+    const fake = makeSql();
+    const requested = await requestExternalAction(fake.tag as unknown as ExternalActionSql, baseInput());
+    const row = fake.requests.get(requested.requestId)!;
+    row.request_payload_hash = "hash:tampered";
+    const decision = fake.decisions.get(requested.decisionId!)!;
+    decision.status = "resolved";
+    decision.selected_option_key = "approve";
+
+    const result = await executeApprovedExternalAction(fake.tag as unknown as ExternalActionSql, { requestId: requested.requestId, actor: "owner" });
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/payload hash mismatch/);
+    expect(executeApprovedConnectorAction).not.toHaveBeenCalled();
+    expect(canonicalConnectorPayloadHash).toHaveBeenCalled();
   });
 
   it("does not execute an approval selected on a non-final decision", async () => {
@@ -256,13 +288,13 @@ describe("external action service", () => {
 
     await expect(executeApprovedExternalAction(fake.tag as unknown as ExternalActionSql, { requestId: requested.requestId, actor: "owner" }))
       .rejects.toThrow("is not approved");
-    expect(invokeConnector).not.toHaveBeenCalled();
+    expect(executeApprovedConnectorAction).not.toHaveBeenCalled();
   });
 
   it("records failed executions with error and redacted response payload", async () => {
     const fake = makeSql();
     fake.policies.push({ id: "policy-allow", hive_id: hiveId, connector: "http-webhook", operation: "post_json", effect: "allow", role_slug: null });
-    vi.mocked(invokeConnector).mockResolvedValue({ success: false, error: "api token=secret-token bad", data: { apiKey: "secret" }, durationMs: 3 } satisfies InvokeResult);
+    vi.mocked(executeApprovedConnectorAction).mockResolvedValue({ success: false, error: "api token=secret-token bad", data: { apiKey: "secret" }, durationMs: 3 } satisfies InvokeResult);
 
     const result = await requestExternalAction(fake.tag as unknown as ExternalActionSql, baseInput());
 
@@ -280,6 +312,6 @@ describe("external action service", () => {
     await rejectExternalAction(fake.tag as unknown as ExternalActionSql, { requestId: requested.requestId, actor: "owner" });
 
     expect(fake.requests.get(requested.requestId)?.state).toBe("rejected");
-    expect(invokeConnector).not.toHaveBeenCalled();
+    expect(executeApprovedConnectorAction).not.toHaveBeenCalled();
   });
 });

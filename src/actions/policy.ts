@@ -1,4 +1,6 @@
 import type { Sql, TransactionSql } from "postgres";
+import { conditionsMatchAction, type ActionPolicyConditions } from "./policy-conditions";
+import type { ConnectorRiskTier } from "@/connectors/registry";
 
 export type ActionPolicyDecision = "allow" | "require_approval" | "block";
 
@@ -14,6 +16,7 @@ export interface ActionPolicyLike {
   effect?: ActionPolicyDecision;
   priority?: number | null;
   disabled?: boolean | null;
+  conditions?: ActionPolicyConditions | Record<string, unknown> | null;
 }
 
 export interface EvaluateActionPolicyInput {
@@ -24,6 +27,8 @@ export interface EvaluateActionPolicyInput {
   defaultDecision: ActionPolicyDecision;
   actorRoleSlug?: string | null;
   args?: unknown;
+  riskTier?: ConnectorRiskTier | string | null;
+  now?: Date;
   policies?: ActionPolicyLike[];
 }
 
@@ -45,6 +50,7 @@ interface ActionPolicyRow {
   role_slug: string | null;
   priority: number | null;
   enabled: boolean | null;
+  conditions: Record<string, unknown>;
 }
 
 const DECISION_TIE_BREAK_RANK: Record<ActionPolicyDecision, number> = {
@@ -90,6 +96,15 @@ function matchesPolicy(policy: ActionPolicyLike, input: EvaluateActionPolicyInpu
     return false;
   }
 
+  if (policy.conditions && Object.keys(policy.conditions).length > 0) {
+    return conditionsMatchAction({
+      conditions: policy.conditions,
+      args: input.args,
+      now: input.now,
+      riskTier: input.riskTier,
+    });
+  }
+
   return true;
 }
 
@@ -128,7 +143,7 @@ export async function loadActionPoliciesForHive(
   hiveId: string,
 ): Promise<ActionPolicyLike[]> {
   const rows = (await sql`
-    SELECT id, hive_id, connector, operation, effect_type, effect, role_slug, priority, enabled
+    SELECT id, hive_id, connector, operation, effect_type, effect, role_slug, priority, enabled, conditions
     FROM action_policies
     WHERE hive_id = ${hiveId}::uuid
   `) as unknown as ActionPolicyRow[];
@@ -143,5 +158,6 @@ export async function loadActionPoliciesForHive(
     effect: row.effect,
     priority: row.priority ?? 0,
     disabled: row.enabled === false,
+    conditions: row.conditions ?? {},
   }));
 }

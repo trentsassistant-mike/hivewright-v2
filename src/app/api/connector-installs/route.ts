@@ -2,7 +2,7 @@ import { sql } from "../_lib/db";
 import { jsonError, jsonOk } from "../_lib/responses";
 import { requireApiUser } from "../_lib/auth";
 import { storeCredential } from "@/credentials/manager";
-import { getConnectorDefinition } from "@/connectors/registry";
+import { getConnectorDefinition, type ConnectorScopeDeclaration } from "@/connectors/registry";
 import { canAccessHive, canMutateHive } from "@/auth/users";
 
 export async function GET(request: Request) {
@@ -25,6 +25,7 @@ export async function GET(request: Request) {
         ci.connector_slug AS "connectorSlug",
         ci.display_name   AS "displayName",
         ci.config,
+        ci.granted_scopes AS "grantedScopes",
         ci.credential_id  AS "credentialId",
         ci.status,
         ci.last_tested_at AS "lastTestedAt",
@@ -57,6 +58,7 @@ export async function POST(request: Request) {
       connectorSlug?: string;
       displayName?: string;
       fields?: Record<string, string>;
+      grantedScopes?: string[];
     };
 
     if (!hiveId || !connectorSlug || !displayName || !fields) {
@@ -70,6 +72,20 @@ export async function POST(request: Request) {
 
     const def = getConnectorDefinition(connectorSlug);
     if (!def) return jsonError(`unknown connector: ${connectorSlug}`, 400);
+
+    const requestedScopes: unknown[] = Array.isArray(body.grantedScopes) ? body.grantedScopes : [];
+    if (!requestedScopes.every((scope) => typeof scope === "string")) {
+      return jsonError("grantedScopes must be an array of strings", 400);
+    }
+    const declaredScopes = new Set(def.scopes.map((scope: ConnectorScopeDeclaration) => scope.key));
+    const unknownScope = requestedScopes.find((scope): scope is string => typeof scope === "string" && !declaredScopes.has(scope));
+    if (unknownScope) {
+      return jsonError(`unknown scope for ${def.slug}: ${unknownScope}`, 400);
+    }
+    const grantedScopes = Array.from(new Set([
+      ...def.scopes.filter((scope: ConnectorScopeDeclaration) => scope.required).map((scope: ConnectorScopeDeclaration) => scope.key),
+      ...(requestedScopes as string[]),
+    ]));
 
     // Validate required non-secret fields.
     for (const f of def.setupFields) {
@@ -110,12 +126,13 @@ export async function POST(request: Request) {
     }
 
     const [row] = await sql`
-      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, credential_id)
+      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, granted_scopes, credential_id)
       VALUES (
         ${hiveId}::uuid,
         ${def.slug},
         ${displayName},
         ${sql.json(publicConfig)},
+        ${sql.json(grantedScopes)},
         ${credentialId}
       )
       RETURNING id

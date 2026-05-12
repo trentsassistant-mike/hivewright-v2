@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { canAccessHive, canMutateHive } from "@/auth/users";
 import { CONNECTOR_REGISTRY, toPublicConnector } from "@/connectors/registry";
+import { normalizeActionPolicyConditions } from "@/actions/policy-conditions";
 import { requireApiUser } from "../_lib/auth";
 import { sql } from "../_lib/db";
 
@@ -227,12 +228,13 @@ function validatePolicy(input: unknown, index: number):
     ? Math.trunc(input.priority)
     : 0;
 
-  const conditions = input.conditions ?? {};
-  if (!isPlainObject(conditions)) {
+  const rawConditions = input.conditions ?? {};
+  if (!isPlainObject(rawConditions)) {
     return { ok: false, error: `policies[${index}].conditions must be an object` };
   }
-  if (Object.keys(conditions).length > 0) {
-    return { ok: false, error: `policies[${index}].conditions are not supported yet` };
+  const conditions = normalizeActionPolicyConditions(rawConditions);
+  if (!conditions) {
+    return { ok: false, error: `policies[${index}].conditions are invalid` };
   }
 
   return {
@@ -247,7 +249,7 @@ function validatePolicy(input: unknown, index: number):
       decision: input.decision as Decision,
       priority,
       reason: reason.value,
-      conditions,
+      conditions: conditions as Record<string, unknown>,
     },
   };
 }

@@ -20,7 +20,18 @@ interface Connector {
   icon: string | null;
   authType: "api_key" | "oauth2" | "webhook" | "none";
   setupFields: SetupField[];
-  operations: { slug: string; label: string }[];
+  scopes?: Array<{ key: string; label: string; kind: string; required: boolean }>;
+  operations: Array<{
+    slug: string;
+    label: string;
+    outputSummary?: string;
+    governance?: {
+      effectType: string;
+      defaultDecision: string;
+      riskTier: string;
+      dryRunSupported?: boolean;
+    };
+  }>;
   requiresDispatcherRestart?: boolean;
 }
 
@@ -37,6 +48,17 @@ interface Install {
   createdAt: string;
   successes7d: number;
   errors7d: number;
+  grantedScopes?: string[];
+}
+
+interface ConnectorAction {
+  id: string;
+  operation: string;
+  state: string;
+  roleSlug: string | null;
+  policyId: string | null;
+  policyReason: string | null;
+  createdAt: string;
 }
 
 export default function ConnectorsPage() {
@@ -45,10 +67,12 @@ export default function ConnectorsPage() {
   const [installs, setInstalls] = useState<Install[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
+  const [selectedScopes, setSelectedScopes] = useState<Record<string, string[]>>({});
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ slug: string; text: string; kind: "ok" | "err" } | null>(null);
   const [oauthBanner, setOauthBanner] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [actionsByInstall, setActionsByInstall] = useState<Record<string, ConnectorAction[]>>({});
 
   useEffect(() => {
     // Pick up oauth round-trip query params so the dashboard shows a banner
@@ -78,6 +102,27 @@ export default function ConnectorsPage() {
     load();
   }, [selected]);
 
+  useEffect(() => {
+    if (installs.length === 0) {
+      setActionsByInstall({});
+      return;
+    }
+    let cancelled = false;
+    Promise.all(installs.map(async (install) => {
+      try {
+        const body = await fetch(`/api/connector-installs/${install.id}/actions`).then((r) => r.json());
+        return [install.id, body.data ?? []] as const;
+      } catch {
+        return [install.id, []] as const;
+      }
+    })).then((entries) => {
+      if (!cancelled) setActionsByInstall(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [installs]);
+
   const byCategory = useMemo(() => {
     const m: Record<string, Connector[]> = {};
     for (const c of catalog) (m[c.category] ||= []).push(c);
@@ -88,6 +133,7 @@ export default function ConnectorsPage() {
     setExpanded(slug);
     setForm({});
     setDisplayName("");
+    setSelectedScopes((current) => ({ ...current, [slug]: [] }));
     setFlash(null);
   }
 
@@ -103,6 +149,7 @@ export default function ConnectorsPage() {
           connectorSlug: c.slug,
           displayName: displayName || c.name,
           fields: form,
+          grantedScopes: selectedScopes[c.slug] ?? [],
         }),
       });
       const body = await res.json();
@@ -259,7 +306,15 @@ export default function ConnectorsPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold text-amber-50">Connectors</h1>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-2xl font-semibold text-amber-50">Connectors</h1>
+          <a
+            href="/setup/action-policies"
+            className="rounded border border-amber-500/30 px-3 py-1 text-sm text-amber-100 hover:bg-amber-500/10"
+          >
+            Action policies
+          </a>
+        </div>
         <p className="text-sm text-amber-600/70">
           Wire {selected.name} up to the outside world. Each connector uses encrypted
           credentials and is scoped to this hive only.
@@ -287,6 +342,7 @@ export default function ConnectorsPage() {
           <div className="space-y-2">
             {installs.map((i) => {
               const def = catalog.find((c) => c.slug === i.connectorSlug);
+              const recentActions = actionsByInstall[i.id] ?? [];
               return (
                 <div
                   key={i.id}
@@ -361,6 +417,44 @@ export default function ConnectorsPage() {
                       Last error: {i.lastError}
                     </p>
                   )}
+                  {def && (
+                    <div className="mt-3 grid gap-3 border-t border-border pt-3 md:grid-cols-3">
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-wide text-amber-500/70">Granted scopes</p>
+                        <ul className="mt-1 space-y-1 text-xs text-amber-300/80">
+                          {(i.grantedScopes ?? []).length > 0 ? i.grantedScopes?.map((scope) => (
+                            <li key={scope}>{scope}</li>
+                          )) : <li>No scopes stored.</li>}
+                        </ul>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-wide text-amber-500/70">Capabilities</p>
+                        <ul className="mt-1 space-y-1 text-xs text-amber-300/80">
+                          {def.operations.map((operation) => (
+                            <li key={operation.slug}>
+                              {operation.label}
+                              {operation.governance ? (
+                                <span className="ml-1 text-amber-500/70">
+                                  {operation.governance.effectType} · {operation.governance.riskTier} · {operation.governance.defaultDecision}
+                                </span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-wide text-amber-500/70">Recent actions</p>
+                        <ul className="mt-1 space-y-1 text-xs text-amber-300/80">
+                          {recentActions.length > 0 ? recentActions.slice(0, 3).map((action) => (
+                            <li key={action.id}>
+                              {action.operation} · {action.state}
+                              {action.roleSlug ? ` · ${action.roleSlug}` : ""}
+                            </li>
+                          )) : <li>No recent actions.</li>}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
                   {flash && flash.slug === i.id && (
                     <p className={`mt-2 text-xs ${flash.kind === "ok" ? "text-emerald-300" : "text-rose-300"}`}>
                       {flash.text}
@@ -399,6 +493,7 @@ export default function ConnectorsPage() {
                         <div className="flex-1">
                           <p className="font-medium text-amber-50">{c.name}</p>
                           <p className="text-xs text-amber-400/70">{c.description}</p>
+                          <ConnectorCapabilitySummary connector={c} />
                           <p className="mt-1 text-xs text-amber-500/80">
                             Click to connect with {c.name} (OAuth)
                           </p>
@@ -413,6 +508,7 @@ export default function ConnectorsPage() {
                         <div className="flex-1">
                           <p className="font-medium text-amber-50">{c.name}</p>
                           <p className="text-xs text-amber-400/70">{c.description}</p>
+                          <ConnectorCapabilitySummary connector={c} />
                         </div>
                       </button>
                     )}
@@ -459,6 +555,29 @@ export default function ConnectorsPage() {
                             )}
                           </div>
                         ))}
+                        {c.scopes && c.scopes.length > 0 && (
+                          <fieldset className="space-y-1">
+                            <legend className="text-xs text-amber-400/80">Scopes</legend>
+                            {c.scopes.map((scope) => (
+                              <label key={scope.key} className="flex items-start gap-2 text-xs text-amber-300/80">
+                                <input
+                                  type="checkbox"
+                                  checked={scope.required || (selectedScopes[c.slug] ?? []).includes(scope.key)}
+                                  disabled={scope.required}
+                                  onChange={(event) => setSelectedScopes((current) => {
+                                    const existing = new Set(current[c.slug] ?? []);
+                                    if (event.target.checked) existing.add(scope.key);
+                                    else existing.delete(scope.key);
+                                    return { ...current, [c.slug]: Array.from(existing) };
+                                  })}
+                                />
+                                <span>
+                                  {scope.label} <span className="text-amber-500/60">({scope.key}{scope.required ? ", required" : ""})</span>
+                                </span>
+                              </label>
+                            ))}
+                          </fieldset>
+                        )}
                         <div className="flex items-center gap-2 pt-1">
                           <button
                             onClick={() => submitInstall(c)}
@@ -498,6 +617,40 @@ export default function ConnectorsPage() {
           </div>
         ))}
       </section>
+    </div>
+  );
+}
+
+function ConnectorCapabilitySummary({ connector }: { connector: Connector }) {
+  return (
+    <div className="mt-2 space-y-2">
+      {connector.scopes && connector.scopes.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {connector.scopes.slice(0, 4).map((scope) => (
+            <span
+              key={scope.key}
+              title={scope.key}
+              className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-200 ring-1 ring-inset ring-amber-500/20"
+            >
+              {scope.kind}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {connector.operations.length > 0 ? (
+        <ul className="space-y-1 text-xs text-amber-500/70">
+          {connector.operations.slice(0, 3).map((operation) => (
+            <li key={operation.slug}>
+              {operation.label}
+              {operation.governance ? (
+                <span>
+                  {" "}· {operation.governance.effectType} · {operation.governance.riskTier} · {operation.governance.defaultDecision}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

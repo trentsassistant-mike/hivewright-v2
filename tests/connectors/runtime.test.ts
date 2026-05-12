@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 import { storeCredential } from "@/credentials/manager";
-import { invokeConnector, loadConnectorInstall } from "@/connectors/runtime";
+import { canonicalConnectorPayloadHash, executeApprovedConnectorAction, invokeConnector, loadConnectorInstall } from "@/connectors/runtime";
 import { setHttpWebhookDnsLookupForTests } from "@/connectors/http-webhook-safety";
 
 const BIZ = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
@@ -21,6 +21,46 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function createApprovedExternalActionRequest(input: {
+  installId: string;
+  connector: string;
+  operation: string;
+  args?: Record<string, unknown>;
+  actor?: string;
+}): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    INSERT INTO external_action_requests (
+      hive_id, connector, operation, role_slug, state, request_payload_hash,
+      request_payload, policy_snapshot, execution_metadata, requested_by
+    )
+    VALUES (
+      ${BIZ}::uuid, ${input.connector}, ${input.operation}, ${null},
+      'approved', ${canonicalConnectorPayloadHash(input.args ?? {})},
+      ${sql.json(JSON.parse(JSON.stringify({ args: input.args ?? {} })))}, ${sql.json({ approvedForTest: true })},
+      ${sql.json({ installId: input.installId })}, ${input.actor ?? "agent-test"}
+    )
+    RETURNING id
+  `;
+  return row.id;
+}
+
+async function invokeApprovedConnector(input: {
+  installId: string;
+  connector: string;
+  operation: string;
+  args?: Record<string, unknown>;
+  actor?: string;
+}) {
+  const requestId = await createApprovedExternalActionRequest(input);
+  return executeApprovedConnectorAction(sql, {
+    installId: input.installId,
+    operation: input.operation,
+    args: input.args,
+    actor: input.actor,
+    approvedExternalActionRequestId: requestId,
+  });
+}
+
 describe("invokeConnector(discord-webhook, send_message)", () => {
   async function installDiscord(webhookUrl: string): Promise<string> {
     const cred = await storeCredential(sql, {
@@ -31,10 +71,11 @@ describe("invokeConnector(discord-webhook, send_message)", () => {
       encryptionKey: TEST_ENCRYPTION_KEY,
     });
     const [row] = await sql<{ id: string }[]>`
-      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, credential_id)
+      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, credential_id, granted_scopes)
       VALUES (${BIZ}::uuid, 'discord-webhook', 'Test webhook',
               ${sql.json({ defaultUsername: "HiveWright QA" })},
-              ${cred.id})
+              ${cred.id},
+              ${sql.json(["discord-webhook:test_connection", "discord-webhook:send_message"])})
       RETURNING id
     `;
     return row.id;
@@ -46,8 +87,19 @@ describe("invokeConnector(discord-webhook, send_message)", () => {
     const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await invokeConnector(sql, {
+    const directResult = await invokeConnector(sql, {
       installId,
+      operation: "send_message",
+      args: { content: "hello world" },
+      actor: "owner-test",
+    });
+    expect(directResult.success).toBe(false);
+    expect(directResult.error).toMatch(/requires an approved external action request/);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const result = await invokeApprovedConnector({
+      installId,
+      connector: "discord-webhook",
       operation: "send_message",
       args: { content: "hello world" },
       actor: "owner-test",
@@ -87,6 +139,41 @@ describe("invokeConnector(discord-webhook, send_message)", () => {
     expect(serializedAudit).not.toContain(TEST_ENCRYPTION_KEY);
   });
 
+  it("blocks operations when the install has not granted the operation scope", async () => {
+    const installId = await installDiscord("https://discord.test/webhooks/no-scope");
+    await sql`
+      UPDATE connector_installs
+      SET granted_scopes = ${sql.json(["discord-webhook:test_connection"])}
+      WHERE id = ${installId}
+    `;
+
+    const requestId = await createApprovedExternalActionRequest({
+      installId,
+      connector: "discord-webhook",
+      operation: "send_message",
+      args: { content: "hello" },
+    });
+
+    const result = await executeApprovedConnectorAction(sql, {
+      installId,
+      operation: "send_message",
+      args: { content: "hello" },
+      approvedExternalActionRequestId: requestId,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/ungranted connector scope/);
+  });
+
+  it("hashes sensitive payload fields so approved actions cannot swap them after approval", () => {
+    const approved = canonicalConnectorPayloadHash({ content: "hello", authHeader: "Bearer one" });
+    const tampered = canonicalConnectorPayloadHash({ content: "hello", authHeader: "Bearer two" });
+    expect(tampered).not.toBe(approved);
+    expect(canonicalConnectorPayloadHash({ _accessToken: "one", content: "hello" })).toBe(
+      canonicalConnectorPayloadHash({ _accessToken: "two", content: "hello" }),
+    );
+  });
+
   it("audits direct connector secret loads without logging secret material", async () => {
     const webhookUrl = "https://discord.test/webhooks/direct-load";
     const installId = await installDiscord(webhookUrl);
@@ -121,8 +208,9 @@ describe("invokeConnector(discord-webhook, send_message)", () => {
     const fetchMock = vi.fn(async () => new Response("nope", { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await invokeConnector(sql, {
+    const result = await invokeApprovedConnector({
       installId,
+      connector: "discord-webhook",
       operation: "send_message",
       args: { content: "hi" },
     });
@@ -181,10 +269,11 @@ describe("invokeConnector(http-webhook, post_json)", () => {
       encryptionKey: TEST_ENCRYPTION_KEY,
     });
     const [row] = await sql<{ id: string }[]>`
-      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, credential_id)
+      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, credential_id, granted_scopes)
       VALUES (${BIZ}::uuid, 'http-webhook', 'Test HTTP webhook',
               ${sql.json({ allowedHostnames: input.allowedHostnames ?? "" })},
-              ${cred.id})
+              ${cred.id},
+              ${sql.json(["http-webhook:test_connection", "http-webhook:post_json"])})
       RETURNING id
     `;
     return row.id;
@@ -225,8 +314,9 @@ describe("invokeConnector(http-webhook, post_json)", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await invokeConnector(sql, {
+    const result = await invokeApprovedConnector({
       installId,
+      connector: "http-webhook",
       operation: "post_json",
       args: { body: "{\"ok\":true}" },
       actor: "agent-test",
@@ -252,8 +342,9 @@ describe("invokeConnector(http-webhook, post_json)", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await invokeConnector(sql, {
+    const result = await invokeApprovedConnector({
       installId,
+      connector: "http-webhook",
       operation: "post_json",
       args: { body: "{}" },
     });
@@ -283,8 +374,9 @@ describe("invokeConnector(http-webhook, post_json)", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await invokeConnector(sql, {
+    const result = await invokeApprovedConnector({
       installId,
+      connector: "http-webhook",
       operation: "post_json",
       args: { body: "{}" },
     });
@@ -304,8 +396,9 @@ describe("invokeConnector(http-webhook, post_json)", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await invokeConnector(sql, {
+    const result = await invokeApprovedConnector({
       installId,
+      connector: "http-webhook",
       operation: "post_json",
       args: { body: "{}" },
     });
@@ -327,8 +420,9 @@ describe("invokeConnector(http-webhook, post_json)", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await invokeConnector(sql, {
+    const result = await invokeApprovedConnector({
       installId,
+      connector: "http-webhook",
       operation: "post_json",
       args: { body: "{}" },
     });
@@ -351,8 +445,9 @@ describe("invokeConnector(http-webhook, post_json)", () => {
     const fetchMock = vi.fn(async () => Response.json({ delivered: true }, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await invokeConnector(sql, {
+    const result = await invokeApprovedConnector({
       installId,
+      connector: "http-webhook",
       operation: "post_json",
       args: { body: "{\"message\":\"hello\"}" },
       actor: "agent-test",
@@ -382,8 +477,9 @@ describe("invokeConnector(http-webhook, post_json)", () => {
     mockDns(["93.184.216.34"]);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 500 })));
 
-    const result = await invokeConnector(sql, {
+    const result = await invokeApprovedConnector({
       installId,
+      connector: "http-webhook",
       operation: "post_json",
       args: { body: "{}" },
     });

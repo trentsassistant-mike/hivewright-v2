@@ -1,4 +1,5 @@
 import type { Sql } from "postgres";
+import { createHash } from "node:crypto";
 import {
   AGENT_AUDIT_EVENTS,
   recordAgentAuditEventBestEffort,
@@ -116,6 +117,28 @@ export interface InvokeInput {
   args?: Record<string, unknown>;
   actor?: string; // role slug or 'system'
   auditContext?: AgentAuditContext;
+  approvedExternalActionRequestId?: string;
+  idempotencyKey?: string | null;
+}
+
+export function canonicalConnectorPayloadHash(args: Record<string, unknown> | undefined): string {
+  const canonicalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !key.startsWith("_"))
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, nested]) => [key, canonicalize(nested)]));
+    }
+    return value;
+  };
+  return createHash("sha256").update(JSON.stringify(canonicalize(args ?? {}))).digest("hex");
+}
+
+function operationCanRunDirectly(op: { slug: string; governance: { effectType: string; defaultDecision: string } }): boolean {
+  if (op.governance.effectType === "read") return op.governance.defaultDecision === "allow";
+  if (op.governance.effectType !== "system") return false;
+  return ["test_connection", "self_test"].includes(op.slug) && op.governance.defaultDecision === "allow";
 }
 
 export async function invokeConnector(
@@ -126,7 +149,7 @@ export async function invokeConnector(
   const actor = input.actor ?? "system";
 
   const [install] = await sql`
-    SELECT id, hive_id, connector_slug, display_name, config, credential_id, status
+    SELECT id, hive_id, connector_slug, display_name, config, credential_id, status, granted_scopes
     FROM connector_installs
     WHERE id = ${input.installId}
   `;
@@ -157,6 +180,49 @@ export async function invokeConnector(
       success: false,
       error: `operation ${input.operation} not supported by ${def.slug}`,
     });
+  }
+
+  const requiredScopes = op.governance.scopes ?? [];
+  if (requiredScopes.length > 0) {
+    const grantedScopes = Array.isArray(install.granted_scopes) ? install.granted_scopes as unknown[] : [];
+    const grantedScopeSet = new Set(grantedScopes.filter((scope): scope is string => typeof scope === "string"));
+    const missingScope = requiredScopes.find((scope) => !grantedScopeSet.has(scope));
+    if (missingScope) {
+      return logAndReturn(sql, install.id as string, input.operation, actor, started, {
+        success: false,
+        error: `operation ${def.slug}.${op.slug} requires ungranted connector scope ${missingScope}`,
+      });
+    }
+  }
+
+  const argsForHash = input.args ?? {};
+  const directAllowed = operationCanRunDirectly(op);
+  if (!directAllowed) {
+    if (!input.approvedExternalActionRequestId) {
+      return logAndReturn(sql, install.id as string, input.operation, actor, started, {
+        success: false,
+        error: `operation ${def.slug}.${op.slug} requires an approved external action request`,
+      });
+    }
+    const expectedHash = canonicalConnectorPayloadHash(argsForHash);
+    const [request] = await sql`
+      SELECT id
+      FROM external_action_requests
+      WHERE id = ${input.approvedExternalActionRequestId}
+        AND hive_id = ${install.hive_id}::uuid
+        AND connector = ${def.slug}
+        AND operation = ${op.slug}
+        AND state IN ('approved', 'executing')
+        AND request_payload_hash = ${expectedHash}
+        AND (${input.idempotencyKey ?? null}::text IS NULL OR idempotency_key = ${input.idempotencyKey ?? null})
+      LIMIT 1
+    `;
+    if (!request) {
+      return logAndReturn(sql, install.id as string, input.operation, actor, started, {
+        success: false,
+        error: `approved external action request does not match ${def.slug}.${op.slug}`,
+      });
+    }
   }
 
   // Decrypt the credential payload, if one is attached.
@@ -300,6 +366,29 @@ export async function invokeConnector(
       error: e instanceof Error ? e.message : String(e),
     });
   }
+}
+
+export async function invokeConnectorReadOnlyOrSystem(
+  sql: Sql,
+  input: InvokeInput,
+): Promise<InvokeResult> {
+  const { approvedExternalActionRequestId: _approvedExternalActionRequestId, ...directInput } = input;
+  void _approvedExternalActionRequestId;
+  return invokeConnector(sql, directInput);
+}
+
+export async function invokeConnectorGoverned(
+  sql: Sql,
+  input: InvokeInput,
+): Promise<InvokeResult> {
+  return invokeConnector(sql, input);
+}
+
+export async function executeApprovedConnectorAction(
+  sql: Sql,
+  input: InvokeInput & { approvedExternalActionRequestId: string },
+): Promise<InvokeResult> {
+  return invokeConnector(sql, input);
 }
 
 async function recordHttpWebhookPostAudit(

@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   exchangeCodeForTokens: vi.fn(),
   getConnectorDefinition: vi.fn(),
   storeCredential: vi.fn(),
-  sql: vi.fn(),
+  sql: Object.assign(vi.fn(), { json: vi.fn((value: unknown) => value) }),
 }));
 
 vi.mock("@/app/api/_lib/db", () => ({
@@ -36,6 +36,7 @@ const oauthDefinition: ConnectorDefinition = {
   authType: "oauth2",
   setupFields: [],
   secretFields: [],
+  scopes: [],
   operations: [],
   oauth: {
     authorizeUrl: "https://provider.test/authorize",

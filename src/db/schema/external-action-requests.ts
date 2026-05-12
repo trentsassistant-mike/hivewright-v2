@@ -37,6 +37,8 @@ export const externalActionRequests = pgTable(
     state: varchar("state", { length: 32 }).$type<ExternalActionRequestState>().default("proposed").notNull(),
     idempotencyKey: varchar("idempotency_key", { length: 255 }),
     externalReference: text("external_reference"),
+    requestPayloadHash: varchar("request_payload_hash", { length: 128 }),
+    operationRiskTier: varchar("operation_risk_tier", { length: 32 }),
     requestPayload: jsonb("request_payload").$type<Record<string, unknown>>().default({}).notNull(),
     responsePayload: jsonb("response_payload").$type<Record<string, unknown>>().default({}).notNull(),
     policySnapshot: jsonb("policy_snapshot").$type<Record<string, unknown>>().default({}).notNull(),

@@ -19,6 +19,7 @@ const fakeOauthDef: ConnectorDefinition = {
   authType: "oauth2",
   setupFields: [],
   secretFields: [],
+  scopes: [],
   operations: [],
   oauth: {
     authorizeUrl: "https://example.test/authorize",

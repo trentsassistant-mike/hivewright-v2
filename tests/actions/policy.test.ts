@@ -201,6 +201,43 @@ describe("evaluateActionPolicy", () => {
       }),
     ).toMatchObject({ decision: "require_approval", policyId: "engineer-approval" });
   });
+
+  it("ignores policies whose conditions do not match the action args", () => {
+    expect(
+      evaluateActionPolicy({
+        ...baseInput,
+        effectType: "financial",
+        defaultDecision: "require_approval",
+        args: { amount: 250 },
+        riskTier: "medium",
+        policies: [
+          {
+            id: "small-amount-allow",
+            hiveId: "hive-1",
+            connectorSlug: "github",
+            operation: "issues.create",
+            effectType: "financial",
+            roleSlug: null,
+            decision: "allow",
+            priority: 100,
+            disabled: false,
+            conditions: { maxAmount: 100 },
+          },
+          {
+            id: "financial-block",
+            hiveId: "hive-1",
+            connectorSlug: "github",
+            operation: "issues.create",
+            effectType: "financial",
+            roleSlug: null,
+            decision: "block",
+            priority: 10,
+            disabled: false,
+          },
+        ],
+      }),
+    ).toMatchObject({ decision: "block", policyId: "financial-block" });
+  });
 });
 
 describe("redactActionPayload", () => {

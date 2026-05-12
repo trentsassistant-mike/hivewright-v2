@@ -1,18 +1,14 @@
 import { jsonError, jsonOk } from "../../../_lib/responses";
 import { sql } from "../../../_lib/db";
 import { requireApiUser } from "../../../_lib/auth";
-import { requestExternalAction } from "@/actions/external-actions";
 import { getConnectorDefinition } from "@/connectors/registry";
+import { invokeConnectorReadOnlyOrSystem } from "@/connectors/runtime";
 import { canMutateHive } from "@/auth/users";
 
 /**
  * POST /api/connector-installs/:id/test
- * Body: { operation: string, args?: Record<string, unknown> }
- *
- * If `operation` is omitted, runs the connector's first declared operation
- * with a sensible default payload so owners can click "Test" without
- * crafting a body. For `discord-webhook.send_message` the default is a
- * "hello from HiveWright" ping.
+ * Body is intentionally ignored for operation selection. This endpoint only
+ * runs the connector's safe system test operation.
  */
 export async function POST(
   request: Request,
@@ -40,16 +36,20 @@ export async function POST(
     const def = getConnectorDefinition(install.connector_slug as string);
     if (!def) return jsonError(`unknown connector ${install.connector_slug}`, 400);
 
-    const operation = body.operation ?? def.operations[0]?.slug;
-    if (!operation) return jsonError("no operation specified", 400);
+    void body;
 
-    const args = body.args ?? defaultTestArgs(def.slug, operation);
+    const testOperation = def.operations.find((operation) =>
+      ["test_connection", "self_test"].includes(operation.slug) &&
+      operation.governance.effectType === "system" &&
+      operation.governance.defaultDecision === "allow" &&
+      operation.governance.riskTier === "low"
+    );
+    if (!testOperation) return jsonError("connector has no safe test operation", 400);
 
-    const result = await requestExternalAction(sql, {
-      hiveId: install.hiveId as string,
+    const result = await invokeConnectorReadOnlyOrSystem(sql, {
       installId: id,
-      operation,
-      args,
+      operation: testOperation.slug,
+      args: {},
       actor: "owner-test",
     });
 
@@ -58,16 +58,4 @@ export async function POST(
     console.error("[api/connector-installs/:id/test]", err);
     return jsonError("Test failed", 500);
   }
-}
-
-function defaultTestArgs(
-  connectorSlug: string,
-  operation: string,
-): Record<string, unknown> {
-  if (connectorSlug === "discord-webhook" && operation === "send_message") {
-    return {
-      content: "👋 Test ping from HiveWright — your connector is wired up.",
-    };
-  }
-  return {};
 }

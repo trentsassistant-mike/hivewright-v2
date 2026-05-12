@@ -43,6 +43,10 @@ const connectorDefinition = {
     { key: "defaultUsername", label: "Sender name" },
   ],
   secretFields: ["webhookUrl"],
+  scopes: [
+    { key: "discord-webhook:test_connection", label: "Test connection", required: true },
+    { key: "discord-webhook:send_message", label: "Send message", required: false },
+  ],
   operations: [{ slug: "send_message" }],
 };
 
@@ -167,5 +171,41 @@ describe("POST /api/connector-installs access control", () => {
       expect.objectContaining({ hiveId: "hive-a", value: JSON.stringify({ webhookUrl: "https://example.test/webhook" }) }),
     );
     expect(mocks.sql).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists required and selected granted scopes", async () => {
+    const res = await POST(installRequest({
+      hiveId: "hive-a",
+      connectorSlug: "discord-webhook",
+      displayName: "Discord",
+      fields: { webhookUrl: "https://example.test/webhook" },
+      grantedScopes: ["discord-webhook:send_message"],
+    }));
+
+    expect(res.status).toBe(201);
+    expect(mocks.sql).toHaveBeenCalledTimes(1);
+    expect(mocks.sql.mock.calls[0][0]).toEqual(expect.arrayContaining([
+      expect.stringContaining("granted_scopes"),
+    ]));
+    expect(mocks.sql.mock.calls[0]).toContainEqual([
+      "discord-webhook:test_connection",
+      "discord-webhook:send_message",
+    ]);
+  });
+
+  it("rejects unknown granted scopes before storing secrets", async () => {
+    const res = await POST(installRequest({
+      hiveId: "hive-a",
+      connectorSlug: "discord-webhook",
+      displayName: "Discord",
+      fields: { webhookUrl: "https://example.test/webhook" },
+      grantedScopes: ["discord-webhook:delete_everything"],
+    }));
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/unknown scope/i);
+    expect(mocks.storeCredential).not.toHaveBeenCalled();
+    expect(mocks.sql).not.toHaveBeenCalled();
   });
 });

@@ -54,12 +54,13 @@ export async function GET(request: Request) {
     });
 
     await sql`
-      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, credential_id, status)
+      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, granted_scopes, credential_id, status)
       VALUES (
         ${stateRow.hiveId}::uuid,
         ${def.slug},
         ${stateRow.displayName},
         '{}'::jsonb,
+        ${sql.json(def.scopes.filter((scope) => scope.required).map((scope) => scope.key))},
         ${cred.id},
         'active'
       )

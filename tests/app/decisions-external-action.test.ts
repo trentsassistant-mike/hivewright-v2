@@ -1,20 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { requestExternalAction } from "@/actions/external-actions";
 import { POST as respondToDecision } from "@/app/api/decisions/[id]/respond/route";
-import { invokeConnector } from "@/connectors/runtime";
+import { executeApprovedConnectorAction } from "@/connectors/runtime";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
-vi.mock("@/connectors/runtime", () => ({
-  invokeConnector: vi.fn(),
-}));
+vi.mock("@/connectors/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/connectors/runtime")>();
+  return {
+    ...actual,
+    executeApprovedConnectorAction: vi.fn(),
+  };
+});
 
 const HIVE = "10000000-0000-4000-8000-000000000001";
 const INSTALL = "10000000-0000-4000-8000-000000000002";
 
 beforeEach(async () => {
   process.env.ENCRYPTION_KEY = "external-action-decision-test-key";
-  vi.mocked(invokeConnector).mockReset();
-  vi.mocked(invokeConnector).mockResolvedValue({
+  vi.mocked(executeApprovedConnectorAction).mockReset();
+  vi.mocked(executeApprovedConnectorAction).mockResolvedValue({
     success: true,
     data: { ok: true, confirmation: "sent", apiKey: "should-redact" },
     durationMs: 4,
@@ -62,8 +66,8 @@ describe("POST /api/decisions/[id]/respond — external action approvals", () =>
     const res = await respondReq(requested.decisionId, { selectedOptionKey: "approve" });
 
     expect(res.status).toBe(200);
-    expect(invokeConnector).toHaveBeenCalledTimes(1);
-    const connectorCall = vi.mocked(invokeConnector).mock.calls[0];
+    expect(executeApprovedConnectorAction).toHaveBeenCalledTimes(1);
+    const connectorCall = vi.mocked(executeApprovedConnectorAction).mock.calls[0];
     expect(connectorCall[1]).toMatchObject({
       installId: INSTALL,
       operation: "post_json",
@@ -84,7 +88,7 @@ describe("POST /api/decisions/[id]/respond — external action approvals", () =>
     expect(again.status).toBe(200);
     const againBody = await again.json();
     expect(againBody.data.externalActionResult).toMatchObject({ requestId: requested.requestId, status: "succeeded" });
-    expect(invokeConnector).toHaveBeenCalledTimes(1);
+    expect(executeApprovedConnectorAction).toHaveBeenCalledTimes(1);
   });
 
   it("marks the linked external action rejected when the reject option resolves the decision", async () => {
@@ -93,7 +97,7 @@ describe("POST /api/decisions/[id]/respond — external action approvals", () =>
     const res = await respondReq(requested.decisionId, { selectedOptionKey: "reject" });
 
     expect(res.status).toBe(200);
-    expect(invokeConnector).not.toHaveBeenCalled();
+    expect(executeApprovedConnectorAction).not.toHaveBeenCalled();
     const [action] = await sql<{ state: string; reviewed_by: string | null }[]>`
       SELECT state, reviewed_by
       FROM external_action_requests
@@ -113,7 +117,7 @@ describe("POST /api/decisions/[id]/respond — external action approvals", () =>
 
     expect(res.status).toBe(400);
     expect(body.error).toContain("must match selectedOptionKey");
-    expect(invokeConnector).not.toHaveBeenCalled();
+    expect(executeApprovedConnectorAction).not.toHaveBeenCalled();
     const [action] = await sql<{ state: string }[]>`
       SELECT state
       FROM external_action_requests
@@ -139,7 +143,7 @@ describe("POST /api/decisions/[id]/respond — external action approvals", () =>
 
     expect(res.status).toBe(400);
     expect(body.error).toContain("must match selectedOptionKey");
-    expect(invokeConnector).not.toHaveBeenCalled();
+    expect(executeApprovedConnectorAction).not.toHaveBeenCalled();
     const [action] = await sql<{ state: string }[]>`
       SELECT state
       FROM external_action_requests
@@ -167,7 +171,7 @@ describe("POST /api/decisions/[id]/respond — external action approvals", () =>
 
     expect(res.status).toBe(400);
     expect(body.error).toContain("must match selectedOptionKey");
-    expect(invokeConnector).not.toHaveBeenCalled();
+    expect(executeApprovedConnectorAction).not.toHaveBeenCalled();
     const [action] = await sql<{ state: string }[]>`
       SELECT state
       FROM external_action_requests
@@ -195,7 +199,7 @@ describe("POST /api/decisions/[id]/respond — external action approvals", () =>
 
     expect(res.status).toBe(400);
     expect(body.error).toContain("must match selectedOptionKey");
-    expect(invokeConnector).not.toHaveBeenCalled();
+    expect(executeApprovedConnectorAction).not.toHaveBeenCalled();
     const [action] = await sql<{ state: string }[]>`
       SELECT state
       FROM external_action_requests
@@ -234,7 +238,7 @@ describe("POST /api/decisions/[id]/respond — external action approvals", () =>
 
     expect(res.status).toBe(400);
     expect(body.error).toContain("external action request");
-    expect(invokeConnector).not.toHaveBeenCalled();
+    expect(executeApprovedConnectorAction).not.toHaveBeenCalled();
     const [row] = await sql<{ status: string }[]>`SELECT status FROM decisions WHERE id = ${decision.id}`;
     expect(row.status).toBe("pending");
   });

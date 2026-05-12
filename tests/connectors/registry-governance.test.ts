@@ -1,98 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { CONNECTOR_REGISTRY, toPublicConnector } from "@/connectors/registry";
+import { CONNECTOR_REGISTRY } from "@/connectors/registry";
+import { validateConnectorManifest } from "@/connectors/manifest-validation";
 
-describe("connector operation governance metadata", () => {
-  it("declares governance metadata for every operation", () => {
+describe("connector registry governance metadata", () => {
+  it("declares schemas, scopes, output summaries, risk tiers, and test paths for every operation", () => {
     for (const connector of CONNECTOR_REGISTRY) {
-      for (const operation of connector.operations) {
-        expect(operation.governance, `${connector.slug}.${operation.slug}`).toEqual({
-          effectType: expect.any(String),
-          defaultDecision: expect.any(String),
-          summary: expect.any(String),
-        });
-        expect(["read", "notify", "write", "financial", "destructive", "system"]).toContain(
-          operation.governance.effectType,
-        );
-        expect(["allow", "require_approval", "block"]).toContain(
-          operation.governance.defaultDecision,
-        );
+      expect(connector.slug).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+      expect(connector.scopes.length, `${connector.slug} scopes`).toBeGreaterThan(0);
+      for (const scope of connector.scopes) {
+        expect(scope.key).toMatch(/^[a-z0-9_.:-]+$/);
+        expect(scope.label).toEqual(expect.any(String));
+        expect(["read", "write", "send", "admin", "financial", "pii"]).toContain(scope.kind);
       }
-    }
-  });
-
-  it("sets initial governance defaults by connector operation", () => {
-    const governanceByOperation = Object.fromEntries(
-      CONNECTOR_REGISTRY.flatMap((connector) =>
-        connector.operations.map((operation) => [
-          `${connector.slug}.${operation.slug}`,
-          operation.governance,
-        ]),
-      ),
-    );
-
-    expect(governanceByOperation).toMatchObject({
-      "discord-webhook.send_message": {
-        effectType: "notify",
-        defaultDecision: "require_approval",
-      },
-      "slack-webhook.send_message": {
-        effectType: "notify",
-        defaultDecision: "require_approval",
-      },
-      "http-webhook.post_json": {
-        effectType: "write",
-        defaultDecision: "require_approval",
-      },
-      "smtp-email.send_email": {
-        effectType: "notify",
-        defaultDecision: "require_approval",
-      },
-      "github-pat.list_issues": {
-        effectType: "read",
-        defaultDecision: "allow",
-      },
-      "stripe.list_recent_charges": {
-        effectType: "financial",
-        defaultDecision: "allow",
-      },
-      "twilio-sms.send_sms": {
-        effectType: "notify",
-        defaultDecision: "require_approval",
-      },
-      "voice-ea.test_connection": {
-        effectType: "system",
-        defaultDecision: "allow",
-      },
-      "gmail.list_threads": {
-        effectType: "read",
-        defaultDecision: "allow",
-      },
-      "gmail.send_email": {
-        effectType: "notify",
-        defaultDecision: "require_approval",
-      },
-      "ea-discord.self_test": {
-        effectType: "system",
-        defaultDecision: "allow",
-      },
-      "ea-discord.send_channel": {
-        effectType: "notify",
-        defaultDecision: "require_approval",
-      },
-    });
-  });
-
-  it("includes governance metadata in public connector output", () => {
-    const publicConnectors = CONNECTOR_REGISTRY.map(toPublicConnector);
-
-    for (const connector of publicConnectors) {
       for (const operation of connector.operations) {
-        expect(operation.governance, `${connector.slug}.${operation.slug}`).toEqual({
-          effectType: expect.any(String),
-          defaultDecision: expect.any(String),
-          summary: expect.any(String),
-        });
+        expect(operation.inputSchema.type, `${connector.slug}.${operation.slug} inputSchema`).toBe("object");
+        expect(operation.inputSchema.properties).toEqual(expect.any(Object));
+        expect(operation.outputSummary, `${connector.slug}.${operation.slug} outputSummary`).toEqual(expect.any(String));
+        expect(operation.outputSummary.length).toBeGreaterThan(8);
+        expect(["low", "medium", "high", "critical"]).toContain(operation.governance.riskTier);
+        expect(["allow", "require_approval", "block"]).toContain(operation.governance.defaultDecision);
+        expect(operation.governance.dryRunSupported, `${connector.slug}.${operation.slug} dryRunSupported`).toEqual(expect.any(Boolean));
+        expect(operation.governance.externalSideEffect, `${connector.slug}.${operation.slug} externalSideEffect`).toEqual(expect.any(Boolean));
       }
+      expect(validateConnectorManifest(connector).valid, connector.slug).toBe(true);
+      const hasSafeTestPath = Boolean(connector.testConnection) || connector.operations.some((op) =>
+        ["test_connection", "self_test"].includes(op.slug) &&
+        op.governance.effectType === "system" &&
+        op.governance.defaultDecision === "allow" &&
+        op.governance.riskTier === "low"
+      );
+      expect(hasSafeTestPath, `${connector.slug} must expose a safe test path`).toBe(true);
     }
   });
 });

@@ -109,6 +109,45 @@ describe("ActionPoliciesPage", () => {
     });
   });
 
+  it("edits common condition fields without requiring raw JSON only", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/action-policies?hiveId=hive-1")) {
+        return jsonResponse({ data: { policies: [policyFixture()], connectors: [connectorFixture()] } });
+      }
+      if (url.includes("/api/action-policies") && init?.method === "PATCH") {
+        return jsonResponse({ data: { policies: [] } });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ActionPoliciesPage />);
+    await screen.findByDisplayValue("Require approval for Discord send");
+    const policy = screen.getByDisplayValue("Require approval for Discord send").closest("article")!;
+
+    fireEvent.change(within(policy).getByLabelText("Max amount"), { target: { value: "250" } });
+    fireEvent.change(within(policy).getByLabelText("Allowed domains"), { target: { value: "example.com\nvendor.test" } });
+    fireEvent.click(within(policy).getByLabelText("Business hours only"));
+    fireEvent.click(within(policy).getByLabelText("Require dry run"));
+    fireEvent.change(within(policy).getByLabelText("Risk tier at most"), { target: { value: "medium" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save policies" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/action-policies",
+      expect.objectContaining({ method: "PATCH" }),
+    ));
+    const patchCall = fetchMock.mock.calls.find((call) => call[0] === "/api/action-policies")!;
+    const body = JSON.parse(String(patchCall[1]?.body));
+    expect(body.policies[0].conditions).toEqual(expect.objectContaining({
+      maxAmount: 250,
+      allowedDomains: ["example.com", "vendor.test"],
+      businessHoursOnly: true,
+      requireDryRun: true,
+      riskTierAtMost: "medium",
+    }));
+  });
+
   it("does not fetch when no hive is selected", () => {
     hiveContextMock.value = {
       selected: null,

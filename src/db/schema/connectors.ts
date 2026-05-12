@@ -7,6 +7,7 @@ import {
   text,
   integer,
   bigserial,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { hives } from "./hives";
 import { credentials } from "./credentials";
@@ -26,6 +27,7 @@ export const connectorInstalls = pgTable("connector_installs", {
   connectorSlug: varchar("connector_slug", { length: 100 }).notNull(),
   displayName: varchar("display_name", { length: 255 }).notNull(),
   config: jsonb("config").$type<Record<string, unknown>>().default({}).notNull(),
+  grantedScopes: jsonb("granted_scopes").$type<string[]>().default([]).notNull(),
   credentialId: uuid("credential_id").references(() => credentials.id, {
     onDelete: "set null",
   }),
@@ -48,3 +50,22 @@ export const connectorEvents = pgTable("connector_events", {
   actor: varchar("actor", { length: 100 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+export const connectorSyncCursors = pgTable(
+  "connector_sync_cursors",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    installId: uuid("install_id")
+      .references(() => connectorInstalls.id, { onDelete: "cascade" })
+      .notNull(),
+    stream: varchar("stream", { length: 128 }).notNull(),
+    cursor: text("cursor"),
+    lastSyncedAt: timestamp("last_synced_at"),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("connector_sync_cursors_install_stream_idx").on(table.installId, table.stream),
+  ],
+);

@@ -20,11 +20,36 @@ import { validateHttpWebhookDestination } from "./http-webhook-safety";
 export type ConnectorAuthType = "api_key" | "oauth2" | "webhook" | "none";
 export type ConnectorEffectType = "read" | "notify" | "write" | "financial" | "destructive" | "system";
 export type ConnectorApprovalDefault = "allow" | "require_approval" | "block";
+export type ConnectorRiskTier = "low" | "medium" | "high" | "critical";
+export type ConnectorScopeKind = "read" | "write" | "send" | "admin" | "financial" | "pii";
+
+export interface ConnectorScopeDeclaration {
+  key: string;
+  label: string;
+  kind: ConnectorScopeKind;
+  required: boolean;
+  description?: string;
+}
+
+export interface ConnectorOperationInputSchema {
+  type: "object";
+  required?: string[];
+  properties: Record<string, {
+    type: "string" | "number" | "boolean" | "object" | "array";
+    description?: string;
+    enum?: string[];
+    format?: string;
+  }>;
+}
 
 export interface ConnectorOperationGovernance {
   effectType: ConnectorEffectType;
   defaultDecision: ConnectorApprovalDefault;
+  riskTier: ConnectorRiskTier;
+  scopes?: string[];
   summary?: string;
+  dryRunSupported?: boolean;
+  externalSideEffect?: boolean;
 }
 
 /**
@@ -53,6 +78,8 @@ export interface ConnectorOperation {
   label: string;
   /** JSON-schema-ish argument spec for dashboard "Test" forms. */
   args?: ConnectorSetupField[];
+  inputSchema: ConnectorOperationInputSchema;
+  outputSummary: string;
   governance: ConnectorOperationGovernance;
   handler: (ctx: ConnectorInvocationContext) => Promise<unknown>;
 }
@@ -81,8 +108,10 @@ export interface ConnectorDefinition {
   authType: ConnectorAuthType;
   setupFields: ConnectorSetupField[];
   secretFields: string[];
+  scopes: ConnectorScopeDeclaration[];
   operations: ConnectorOperation[];
   oauth?: OAuth2Config;
+  testConnection?: (ctx: ConnectorInvocationContext) => Promise<unknown>;
   /**
    * Connectors that open a persistent listener inside the dispatcher
    * (e.g. the Discord-hosted EA) need a dispatcher restart before a
@@ -91,6 +120,11 @@ export interface ConnectorDefinition {
    */
   requiresDispatcherRestart?: boolean;
 }
+
+type ConnectorDefinitionDraft = Omit<ConnectorDefinition, "scopes" | "operations"> & {
+  scopes?: ConnectorScopeDeclaration[];
+  operations: ConnectorOperation[];
+};
 
 /**
  * Passed to every operation handler. `config` is the non-secret install
@@ -107,7 +141,7 @@ export interface ConnectorInvocationContext {
 // Discord webhook — outbound messaging. Pure URL + POST JSON. Zero OAuth
 // setup; proves the runtime plumbing on something real.
 // ---------------------------------------------------------------------
-const discordWebhook: ConnectorDefinition = {
+const discordWebhook: ConnectorDefinitionDraft = {
   slug: "discord-webhook",
   name: "Discord webhook",
   category: "messaging",
@@ -137,10 +171,21 @@ const discordWebhook: ConnectorDefinition = {
     {
       slug: "send_message",
       label: "Send a message",
+      inputSchema: {
+        type: "object",
+        required: ["content"],
+        properties: {
+          content: { type: "string", description: "Message text" },
+        },
+      },
+      outputSummary: "Posts a message to the configured Discord webhook channel.",
       governance: {
         effectType: "notify",
         defaultDecision: "require_approval",
+        riskTier: "low",
         summary: "Posts a message to the configured Discord webhook channel.",
+        dryRunSupported: false,
+        externalSideEffect: true,
       },
       args: [
         { key: "content", label: "Message text", type: "textarea", required: true },
@@ -172,7 +217,7 @@ const discordWebhook: ConnectorDefinition = {
 // Slack incoming webhook — identical shape to Discord. Separate connector
 // so owners don't have to remember "post Slack via the Discord connector."
 // ---------------------------------------------------------------------
-const slackWebhook: ConnectorDefinition = {
+const slackWebhook: ConnectorDefinitionDraft = {
   slug: "slack-webhook",
   name: "Slack webhook",
   category: "messaging",
@@ -200,10 +245,21 @@ const slackWebhook: ConnectorDefinition = {
     {
       slug: "send_message",
       label: "Send a message",
+      inputSchema: {
+        type: "object",
+        required: ["text"],
+        properties: {
+          text: { type: "string", description: "Text" },
+        },
+      },
+      outputSummary: "Posts a message to the configured Slack webhook channel.",
       governance: {
         effectType: "notify",
         defaultDecision: "require_approval",
+        riskTier: "low",
         summary: "Posts a message to the configured Slack webhook channel.",
+        dryRunSupported: false,
+        externalSideEffect: true,
       },
       args: [
         { key: "text", label: "Text", type: "textarea", required: true },
@@ -236,7 +292,7 @@ const slackWebhook: ConnectorDefinition = {
 // Useful as a fallback when we don't have a dedicated connector for a
 // service yet. Also lets agents hit internal webhooks (Zapier-like).
 // ---------------------------------------------------------------------
-const httpWebhook: ConnectorDefinition = {
+const httpWebhook: ConnectorDefinitionDraft = {
   slug: "http-webhook",
   name: "Generic HTTP webhook",
   category: "other",
@@ -267,10 +323,21 @@ const httpWebhook: ConnectorDefinition = {
     {
       slug: "post_json",
       label: "POST JSON",
+      inputSchema: {
+        type: "object",
+        required: ["body"],
+        properties: {
+          body: { type: "object", description: "Body (JSON)" },
+        },
+      },
+      outputSummary: "Sends a JSON POST to the configured HTTP endpoint.",
       governance: {
         effectType: "write",
         defaultDecision: "require_approval",
+        riskTier: "medium",
         summary: "Sends a JSON POST to the configured HTTP endpoint.",
+        dryRunSupported: false,
+        externalSideEffect: true,
       },
       args: [
         { key: "body", label: "Body (JSON)", type: "textarea", required: true },
@@ -319,7 +386,7 @@ const httpWebhook: ConnectorDefinition = {
 // SMTP email — outbound only. Uses the owner's own SMTP creds (Gmail,
 // Outlook, Mailgun, SendGrid SMTP bridge, etc.) so we don't need OAuth.
 // ---------------------------------------------------------------------
-const smtpEmail: ConnectorDefinition = {
+const smtpEmail: ConnectorDefinitionDraft = {
   slug: "smtp-email",
   name: "SMTP email",
   category: "email",
@@ -340,10 +407,23 @@ const smtpEmail: ConnectorDefinition = {
     {
       slug: "send_email",
       label: "Send email",
+      inputSchema: {
+        type: "object",
+        required: ["to", "subject", "body"],
+        properties: {
+          to: { type: "string", description: "To" },
+          subject: { type: "string", description: "Subject" },
+          body: { type: "object", description: "Body (plain text or HTML)" },
+        },
+      },
+      outputSummary: "Sends an outbound email via the configured SMTP account.",
       governance: {
         effectType: "notify",
         defaultDecision: "require_approval",
+        riskTier: "low",
         summary: "Sends an outbound email via the configured SMTP account.",
+        dryRunSupported: false,
+        externalSideEffect: true,
       },
       args: [
         { key: "to", label: "To", type: "text", required: true },
@@ -391,7 +471,7 @@ const smtpEmail: ConnectorDefinition = {
 // Read-only operations first so agents can summarise issues/PRs without
 // write scope. Write operations (comment, create-issue) later.
 // ---------------------------------------------------------------------
-const githubPat: ConnectorDefinition = {
+const githubPat: ConnectorDefinitionDraft = {
   slug: "github-pat",
   name: "GitHub (PAT)",
   category: "ops",
@@ -409,10 +489,23 @@ const githubPat: ConnectorDefinition = {
     {
       slug: "list_issues",
       label: "List open issues",
+      inputSchema: {
+        type: "object",
+        required: [],
+        properties: {
+          owner: { type: "string", description: "Owner" },
+          repo: { type: "string", description: "Repo" },
+          limit: { type: "number", description: "Limit (default 20)" },
+        },
+      },
+      outputSummary: "Reads open issue metadata from the configured GitHub repository.",
       governance: {
         effectType: "read",
         defaultDecision: "allow",
+        riskTier: "low",
         summary: "Reads open issue metadata from the configured GitHub repository.",
+        dryRunSupported: false,
+        externalSideEffect: false,
       },
       args: [
         { key: "owner", label: "Owner", type: "text" },
@@ -452,7 +545,7 @@ const githubPat: ConnectorDefinition = {
 // Stripe API key — read-only listings first. Payments/charges will be a
 // separate write-scope operation with explicit owner decision.
 // ---------------------------------------------------------------------
-const stripe: ConnectorDefinition = {
+const stripe: ConnectorDefinitionDraft = {
   slug: "stripe",
   name: "Stripe",
   category: "payments",
@@ -468,10 +561,21 @@ const stripe: ConnectorDefinition = {
     {
       slug: "list_recent_charges",
       label: "List recent charges",
+      inputSchema: {
+        type: "object",
+        required: [],
+        properties: {
+          limit: { type: "number", description: "Limit (default 10)" },
+        },
+      },
+      outputSummary: "Reads recent Stripe charge metadata without creating or modifying payments.",
       governance: {
         effectType: "financial",
-        defaultDecision: "allow",
+        defaultDecision: "require_approval",
+        riskTier: "high",
         summary: "Reads recent Stripe charge metadata without creating or modifying payments.",
+        dryRunSupported: false,
+        externalSideEffect: true,
       },
       args: [{ key: "limit", label: "Limit (default 10)", type: "text" }],
       handler: async ({ secrets, args }) => {
@@ -502,7 +606,7 @@ const stripe: ConnectorDefinition = {
 // ---------------------------------------------------------------------
 // Twilio SMS — outbound text messages for customer comms / pager alerts.
 // ---------------------------------------------------------------------
-const twilioSms: ConnectorDefinition = {
+const twilioSms: ConnectorDefinitionDraft = {
   slug: "twilio-sms",
   name: "Twilio SMS",
   category: "messaging",
@@ -519,10 +623,22 @@ const twilioSms: ConnectorDefinition = {
     {
       slug: "send_sms",
       label: "Send SMS",
+      inputSchema: {
+        type: "object",
+        required: ["to", "body"],
+        properties: {
+          to: { type: "string", description: "To (E.164)" },
+          body: { type: "object", description: "Message" },
+        },
+      },
+      outputSummary: "Sends an outbound SMS via the configured Twilio account.",
       governance: {
         effectType: "notify",
         defaultDecision: "require_approval",
+        riskTier: "low",
         summary: "Sends an outbound SMS via the configured Twilio account.",
+        dryRunSupported: false,
+        externalSideEffect: true,
       },
       args: [
         { key: "to", label: "To (E.164)", type: "text", required: true },
@@ -568,7 +684,7 @@ const twilioSms: ConnectorDefinition = {
 // scope; migration `0097_voice_ea_connector_rename.sql` renames its slug
 // and strips the orphaned Twilio fields.
 // ---------------------------------------------------------------------
-const voiceEa: ConnectorDefinition = {
+const voiceEa: ConnectorDefinitionDraft = {
   slug: "voice-ea",
   name: "Voice EA",
   category: "ea",
@@ -600,10 +716,19 @@ const voiceEa: ConnectorDefinition = {
     {
       slug: "test_connection",
       label: "Test connection",
+      inputSchema: {
+        type: "object",
+        required: [],
+        properties: {},
+      },
+      outputSummary: "Checks connectivity to the configured voice services health endpoint.",
       governance: {
         effectType: "system",
         defaultDecision: "allow",
+        riskTier: "low",
         summary: "Checks connectivity to the configured voice services health endpoint.",
+        dryRunSupported: false,
+        externalSideEffect: false,
       },
       args: [],
       handler: async ({ config }) => {
@@ -631,7 +756,7 @@ const voiceEa: ConnectorDefinition = {
 // persisted so the connector keeps working past the hour-long access
 // token lifetime.
 // ---------------------------------------------------------------------
-const gmail: ConnectorDefinition = {
+const gmail: ConnectorDefinitionDraft = {
   slug: "gmail",
   name: "Gmail",
   category: "email",
@@ -656,10 +781,22 @@ const gmail: ConnectorDefinition = {
     {
       slug: "list_threads",
       label: "List recent threads",
+      inputSchema: {
+        type: "object",
+        required: [],
+        properties: {
+          query: { type: "string", description: "Search query" },
+          maxResults: { type: "string", description: "Max results (default 10)" },
+        },
+      },
+      outputSummary: "Reads recent Gmail thread metadata using the OAuth readonly scope.",
       governance: {
         effectType: "read",
         defaultDecision: "allow",
+        riskTier: "low",
         summary: "Reads recent Gmail thread metadata using the OAuth readonly scope.",
+        dryRunSupported: false,
+        externalSideEffect: false,
       },
       args: [
         { key: "query", label: "Search query", type: "text", placeholder: "is:unread" },
@@ -687,10 +824,23 @@ const gmail: ConnectorDefinition = {
     {
       slug: "send_email",
       label: "Send an email",
+      inputSchema: {
+        type: "object",
+        required: ["to", "subject", "body"],
+        properties: {
+          to: { type: "string", description: "To" },
+          subject: { type: "string", description: "Subject" },
+          body: { type: "object", description: "Body" },
+        },
+      },
+      outputSummary: "Sends an outbound email from the connected Gmail account.",
       governance: {
         effectType: "notify",
         defaultDecision: "require_approval",
+        riskTier: "low",
         summary: "Sends an outbound email from the connected Gmail account.",
+        dryRunSupported: false,
+        externalSideEffect: true,
       },
       args: [
         { key: "to", label: "To", type: "text", required: true },
@@ -750,7 +900,7 @@ const gmail: ConnectorDefinition = {
 // chat loop runs in src/ea/native/ (started by the dispatcher at
 // startup, one handle per active install of this connector).
 // ---------------------------------------------------------------------
-const eaDiscord: ConnectorDefinition = {
+const eaDiscord: ConnectorDefinitionDraft = {
   slug: "ea-discord",
   name: "HiveWright EA (Discord)",
   category: "messaging",
@@ -808,10 +958,19 @@ const eaDiscord: ConnectorDefinition = {
     {
       slug: "self_test",
       label: "Test connection",
+      inputSchema: {
+        type: "object",
+        required: [],
+        properties: {},
+      },
+      outputSummary: "Verifies the Discord bot token and returns configured EA connection details.",
       governance: {
         effectType: "system",
         defaultDecision: "allow",
+        riskTier: "low",
         summary: "Verifies the Discord bot token and returns configured EA connection details.",
+        dryRunSupported: false,
+        externalSideEffect: false,
       },
       args: [],
       handler: async ({ config, secrets }) => {
@@ -836,10 +995,21 @@ const eaDiscord: ConnectorDefinition = {
     {
       slug: "send_channel",
       label: "Send Discord channel message",
+      inputSchema: {
+        type: "object",
+        required: ["content"],
+        properties: {
+          content: { type: "string", description: "Message text" },
+        },
+      },
+      outputSummary: "Posts a system/EA notification to the configured Discord channel through the EA bot.",
       governance: {
         effectType: "notify",
         defaultDecision: "require_approval",
+        riskTier: "low",
         summary: "Posts a system/EA notification to the configured Discord channel through the EA bot.",
+        dryRunSupported: false,
+        externalSideEffect: true,
       },
       args: [
         { key: "content", label: "Message text", type: "textarea", required: true },
@@ -869,6 +1039,58 @@ const eaDiscord: ConnectorDefinition = {
   ],
 };
 
+function defaultScopeKind(effectType: ConnectorEffectType): ConnectorScopeKind {
+  if (effectType === "read" || effectType === "system") return "read";
+  if (effectType === "notify") return "send";
+  if (effectType === "financial") return "financial";
+  if (effectType === "destructive") return "admin";
+  return "write";
+}
+
+function normalizeConnector(connector: ConnectorDefinitionDraft): ConnectorDefinition {
+  const generatedTestOperation: ConnectorOperation = {
+    slug: "test_connection",
+    label: "Test connection",
+    args: [],
+    inputSchema: { type: "object", properties: {} },
+    outputSummary: "Returns connector installation health without performing external side effects.",
+    governance: {
+      effectType: "system",
+      defaultDecision: "allow",
+      riskTier: "low",
+      summary: "Checks that the connector install is present and can be invoked by the health/test route.",
+      dryRunSupported: false,
+      externalSideEffect: false,
+    },
+    handler: connector.testConnection ?? (async () => ({ ok: true })),
+  };
+  const baseOperations: ConnectorOperation[] = connector.operations.some((op) => ["test_connection", "self_test"].includes(op.slug))
+    ? connector.operations
+    : [generatedTestOperation, ...connector.operations];
+  const operationScopes = baseOperations.map((op) => ({
+    key: `${connector.slug}:${op.slug}`,
+    label: op.label,
+    kind: defaultScopeKind(op.governance.effectType),
+    required: op.governance.effectType === "read" || op.governance.effectType === "system",
+    description: op.governance.summary,
+  } satisfies ConnectorScopeDeclaration));
+  const scopes = connector.scopes && connector.scopes.length > 0 ? connector.scopes : operationScopes;
+  return {
+    ...connector,
+    scopes,
+    operations: baseOperations.map((op) => {
+      const scopeKey = `${connector.slug}:${op.slug}`;
+      return {
+        ...op,
+        governance: {
+          ...op.governance,
+          scopes: op.governance.scopes ?? [scopeKey],
+        },
+      };
+    }),
+  };
+}
+
 export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   discordWebhook,
   slackWebhook,
@@ -880,7 +1102,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   voiceEa,
   gmail,
   eaDiscord,
-];
+].map(normalizeConnector);
 
 export function getConnectorDefinition(slug: string): ConnectorDefinition | undefined {
   return CONNECTOR_REGISTRY.find((c) => c.slug === slug);
@@ -892,6 +1114,7 @@ export function getConnectorDefinition(slug: string): ConnectorDefinition | unde
  * JSON without blowing up.
  */
 export function toPublicConnector(c: ConnectorDefinition) {
+  const secretFields = new Set(c.secretFields);
   return {
     slug: c.slug,
     name: c.name,
@@ -899,12 +1122,19 @@ export function toPublicConnector(c: ConnectorDefinition) {
     description: c.description,
     icon: c.icon ?? null,
     authType: c.authType,
-    setupFields: c.setupFields,
+    setupFields: c.setupFields.map((field) => ({
+      ...field,
+      type: secretFields.has(field.key) ? "password" as const : field.type,
+      placeholder: secretFields.has(field.key) ? "[REDACTED]" : field.placeholder,
+    })),
+    scopes: c.scopes ?? [],
     operations: c.operations.map((op) => ({
       slug: op.slug,
       label: op.label,
       governance: op.governance,
       args: op.args ?? [],
+      inputSchema: op.inputSchema,
+      outputSummary: op.outputSummary,
     })),
     requiresDispatcherRestart: c.requiresDispatcherRestart ?? false,
   };
