@@ -38,7 +38,7 @@ describe("GET /api/roles read behavior", () => {
   });
 
   it("preserves the active-role filter while returning enriched role rows", async () => {
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/roles"));
 
     expect(res.status).toBe(200);
     // calls[0] = sql`WHERE rt.active = true` fragment; calls[1] = main SELECT query

@@ -109,26 +109,33 @@ export async function readLatestTaskContextProvenance(
   sql: Sql,
   taskId: string,
 ): Promise<ContextProvenance> {
-  const [row] = await sql<{ chunk: unknown }[]>`
+  const marker = TASK_CONTEXT_PROVENANCE_KIND;
+  const rows = await sql<{ chunk: unknown }[]>`
     SELECT chunk
     FROM task_logs
     WHERE task_id = ${taskId}
       AND type = 'diagnostic'
-      AND chunk::jsonb ->> 'kind' = ${TASK_CONTEXT_PROVENANCE_KIND}
+      AND chunk LIKE ${`%${marker}%`}
     ORDER BY id DESC
-    LIMIT 1
+    LIMIT 10
   `;
-  if (!row) return emptyTaskContextProvenance("unavailable");
 
-  const chunk = row.chunk;
-  if (typeof chunk === "string") {
-    try {
-      return normalizeTaskContextProvenance(JSON.parse(chunk)) ?? emptyTaskContextProvenance("unavailable");
-    } catch {
-      return emptyTaskContextProvenance("unavailable");
+  for (const row of rows) {
+    const chunk = row.chunk;
+    if (typeof chunk === "string") {
+      try {
+        const normalized = normalizeTaskContextProvenance(JSON.parse(chunk));
+        if (normalized) return normalized;
+      } catch {
+        continue;
+      }
+    } else {
+      const normalized = normalizeTaskContextProvenance(chunk);
+      if (normalized) return normalized;
     }
   }
-  return normalizeTaskContextProvenance(chunk) ?? emptyTaskContextProvenance("unavailable");
+
+  return emptyTaskContextProvenance("unavailable");
 }
 
 function normalizeEntry(value: unknown): ContextProvenanceEntry | null {

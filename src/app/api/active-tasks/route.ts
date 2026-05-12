@@ -1,6 +1,7 @@
 import { sql } from "../_lib/db";
 import { requireApiUser } from "../_lib/auth";
 import { canAccessHive } from "@/auth/users";
+import { isDecisionLiveBlocking, isTaskLiveBlocking } from "./live-blocking";
 
 interface TaskRow {
   id: string;
@@ -145,6 +146,11 @@ export async function GET(request: Request) {
         created_at DESC
     `) as unknown as CriticalTaskRow[];
 
+    // Align the relationship map's decision blockers with the owner-facing
+    // brief and default decisions feed: only unresolved owner decisions
+    // (`kind='decision'`, `status='pending'`) belong in the live blocker
+    // count. Workflow-specific approvals/escalations live on their domain
+    // surfaces and should not keep the topology glowing red.
     const criticalDecisionRows = (await sql`
       SELECT
         d.id,
@@ -158,14 +164,10 @@ export async function GET(request: Request) {
       FROM decisions d
       LEFT JOIN goals g ON g.id = d.goal_id AND g.hive_id = d.hive_id
       WHERE d.hive_id = ${hiveId}::uuid
-        AND d.status IN ('pending', 'ea_review')
+        AND d.status = 'pending'
+        AND d.kind = 'decision'
         AND d.is_qa_fixture = false
       ORDER BY
-        CASE d.status
-          WHEN 'pending' THEN 0
-          WHEN 'ea_review' THEN 1
-          ELSE 2
-        END,
         d.created_at DESC
       LIMIT 12
     `) as unknown as CriticalDecisionRow[];
@@ -203,21 +205,6 @@ export async function GET(request: Request) {
   }
 
   return Response.json(response);
-}
-
-// A failed/unresolvable/blocked task only blocks live work when the goal it
-// belongs to is still active (or it is a direct task with no goal). Failures
-// under achieved/cancelled/abandoned/completed goals are kept as historical
-// audit context and excluded from the live-critical state.
-export function isTaskLiveBlocking(taskStatus: string, goalStatus: string | null): boolean {
-  if (!["blocked", "failed", "unresolvable"].includes(taskStatus)) return false;
-  if (goalStatus === null) return true;
-  return goalStatus === "active";
-}
-
-export function isDecisionLiveBlocking(goalStatus: string | null): boolean {
-  if (goalStatus === null) return true;
-  return goalStatus === "active";
 }
 
 function mapTaskRow(r: TaskRow) {

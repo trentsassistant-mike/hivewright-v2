@@ -18,7 +18,8 @@ vi.mock("@/auth/users", () => ({
   canAccessHive: mocks.canAccessHive,
 }));
 
-import { GET, isTaskLiveBlocking, isDecisionLiveBlocking } from "./route";
+import { GET } from "./route";
+import { isDecisionLiveBlocking, isTaskLiveBlocking } from "./live-blocking";
 
 describe("operations-map live-critical filtering", () => {
   it("flags critical tasks under no goal as live-blocking (direct work)", () => {

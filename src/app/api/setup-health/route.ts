@@ -6,11 +6,11 @@ import { sql } from "../_lib/db";
 import { requireApiAuth, requireApiUser, requireSystemOwner } from "../_lib/auth";
 import { jsonError, jsonOk } from "../_lib/responses";
 
-export async function GET(request?: Request) {
+export async function GET(request: Request) {
   const unauth = await requireApiAuth();
   if (unauth) return unauth;
 
-  const hiveId = request ? new URL(request.url).searchParams.get("hiveId") : null;
+  const hiveId = new URL(request.url).searchParams.get("hiveId");
   if (hiveId) {
     const authz = await requireApiUser();
     if ("response" in authz) return authz.response;

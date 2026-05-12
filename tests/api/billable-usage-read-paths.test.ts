@@ -14,7 +14,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { GET as getTasks } from "@/app/api/tasks/route";
 import { GET as getTaskById } from "@/app/api/tasks/[id]/route";
 import { GET as getSupervisorReports } from "@/app/api/supervisor-reports/route";
-import { GET as getAnalytics, toNaiveLocalTimestamp } from "@/app/api/analytics/route";
+import { GET as getAnalytics } from "@/app/api/analytics/route";
+import { toNaiveLocalTimestamp } from "@/app/api/analytics/time";
 import { testSql as db, truncateAll } from "../_lib/test-db";
 
 const TEST_PREFIX = "billable-wp2-";

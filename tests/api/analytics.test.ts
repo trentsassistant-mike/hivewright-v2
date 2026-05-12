@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { GET as getAnalytics, toNaiveLocalTimestamp } from "@/app/api/analytics/route";
+import { GET as getAnalytics } from "@/app/api/analytics/route";
+import { toNaiveLocalTimestamp } from "@/app/api/analytics/time";
 import { testSql as db, truncateAll } from "../_lib/test-db";
 
 const TEST_PREFIX = "analytics-";

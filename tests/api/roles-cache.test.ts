@@ -33,13 +33,13 @@ afterEach(() => {
 describe("roles route caching", () => {
   it("populates the cache after a GET /api/roles call", async () => {
     expect(getCachedStatus("cache-agent")).toBeUndefined();
-    const res = await ROLES_GET();
+    const res = await ROLES_GET(new Request("http://localhost/api/roles"));
     expect(res.status).toBe(200);
     expect(getCachedStatus("cache-agent")).toBeDefined();
   });
 
   it("provision invalidates the cached entry for that slug", async () => {
-    await ROLES_GET();
+    await ROLES_GET(new Request("http://localhost/api/roles"));
     expect(getCachedStatus("cache-agent")).toBeDefined();
 
     const req = new Request("http://x/api/roles/cache-agent/provision", { method: "POST" });

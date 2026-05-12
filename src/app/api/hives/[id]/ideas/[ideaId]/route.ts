@@ -6,7 +6,7 @@ import { canAccessHive } from "@/auth/users";
 import { validateAttachmentFiles } from "@/attachments/constants";
 import { persistAttachmentsForParent } from "@/attachments/persist";
 import { isValidStatus } from "../_status";
-import { ideaRowToApi } from "../route";
+import { ideaRowToApi } from "../idea-row";
 import {
   isSystemPath,
   readSystemRoleHeader,

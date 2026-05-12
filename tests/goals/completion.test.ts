@@ -372,7 +372,7 @@ describe("completeGoal", () => {
         rationale: "The template should be reviewed even when the goal title is long.",
         action: "Create a reusable template from this goal.",
       },
-    })).resolves.toBeUndefined();
+    })).resolves.toMatchObject({ completed: true, status: "achieved" });
 
     const [decision] = await sql<{ title: string }[]>`
       SELECT title

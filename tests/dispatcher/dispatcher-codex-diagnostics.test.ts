@@ -184,6 +184,13 @@ async function readClaimedTask(taskId: string) {
   };
 }
 
+function readDiagnosticRows(rows: { type: string; chunk: string }[]) {
+  return rows.flatMap((row, rowIndex) => {
+    if (row.type !== "diagnostic") return [];
+    return [{ rowIndex, chunk: JSON.parse(row.chunk) as Record<string, unknown> }];
+  });
+}
+
 beforeEach(async () => {
   await truncateAll(sql);
   vi.mocked(decideProviderFailoverRoute).mockImplementation((input) => ({
@@ -345,11 +352,16 @@ describe("dispatcher codex runtime diagnostics", () => {
     const rows = await sql<{ type: string; chunk: string }[]>`
       SELECT type, chunk FROM task_logs WHERE task_id = ${task.id} ORDER BY id ASC
     `;
+    const diagnostics = readDiagnosticRows(rows);
     const diagnosticIndex = rows.findIndex((row) => row.type === "diagnostic");
+    const codexDiagnostic = diagnostics.find((row) => row.chunk.kind === "codex_empty_output");
+    const provenanceDiagnostic = diagnostics.find((row) => row.chunk.kind === "task_context_provenance");
     const doneIndex = rows.findIndex((row) => row.type === "done");
     expect(diagnosticIndex).toBeGreaterThanOrEqual(0);
-    expect(doneIndex).toBeGreaterThan(diagnosticIndex);
-    expect(JSON.parse(rows[diagnosticIndex].chunk)).toMatchObject(diagnostic);
+    expect(codexDiagnostic?.rowIndex).toBe(diagnosticIndex);
+    expect(provenanceDiagnostic?.rowIndex).toBeGreaterThan(codexDiagnostic!.rowIndex);
+    expect(doneIndex).toBeGreaterThan(codexDiagnostic!.rowIndex);
+    expect(codexDiagnostic!.chunk).toMatchObject(diagnostic);
   });
 
   it("does not overwrite tasks.failure_reason with diagnostic metadata", async () => {
@@ -429,12 +441,17 @@ describe("dispatcher codex runtime diagnostics", () => {
     const rows = await sql<{ type: string; chunk: string }[]>`
       SELECT type, chunk FROM task_logs WHERE task_id = ${task.id} ORDER BY id ASC
     `;
+    const diagnostics = readDiagnosticRows(rows);
     const diagnosticIndex = rows.findIndex((row) => row.type === "diagnostic");
+    const codexDiagnostic = diagnostics.find((row) => row.chunk.kind === "codex_empty_output");
+    const provenanceDiagnostic = diagnostics.find((row) => row.chunk.kind === "task_context_provenance");
     const doneIndex = rows.findIndex((row) => row.type === "done");
     expect(diagnosticIndex).toBeGreaterThanOrEqual(0);
-    expect(doneIndex).toBeGreaterThan(diagnosticIndex);
+    expect(codexDiagnostic?.rowIndex).toBe(diagnosticIndex);
+    expect(provenanceDiagnostic?.rowIndex).toBeGreaterThan(codexDiagnostic!.rowIndex);
+    expect(doneIndex).toBeGreaterThan(codexDiagnostic!.rowIndex);
 
-    const diagnosticRow = JSON.parse(rows[diagnosticIndex].chunk) as CodexEmptyOutputDiagnostic;
+    const diagnosticRow = codexDiagnostic!.chunk as unknown as CodexEmptyOutputDiagnostic;
     expect(diagnosticRow).toMatchObject({
       kind: "codex_empty_output",
       codexEmptyOutput: true,

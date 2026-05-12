@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { Sql } from "postgres";
-import { decrypt } from "../../credentials/encryption";
+import { requestExternalAction } from "@/actions/external-actions";
 
 export type NotifierCategory = "decision_owner" | "goal_achieved" | "goal_failed";
 
@@ -32,12 +33,15 @@ export interface OutboundNotifierConfig extends NotifierConfig {
 export interface NotifierSendResult {
   ok: boolean;
   error?: string;
+  pendingApproval?: boolean;
+  externalActionRequestId?: string;
 }
 
 export type NotifierSender = (event: {
   hiveId: string | null;
   channelId: string;
   content: string;
+  idempotencyKey?: string;
 }) => Promise<NotifierSendResult>;
 
 export type LegacyNotificationCategory = "owner_decision" | "goal_achieved" | "goal_failed";
@@ -66,6 +70,14 @@ interface Bucket {
 const DEFAULT_ACHIEVED_CHANNEL_ID = "1487611062928019618";
 const DEFAULT_FAILED_CHANNEL_ID = "1487611062953050204";
 const SNOWFLAKE_RE = /^\d{17,20}$/;
+
+function hashForIdempotency(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 40);
+}
+
+function outboundNotifierIdempotencyKey(ids: string[], channelId: string, content: string): string {
+  return `outbound-notifier:${hashForIdempotency(JSON.stringify({ ids: [...ids].sort(), channelId, content }))}`;
+}
 
 export function isDiscordSnowflake(value: string): boolean {
   return SNOWFLAKE_RE.test(value);
@@ -387,6 +399,7 @@ export class OutboundNotifier {
       hiveId: events[0].hiveId,
       channelId: events[0].channelId,
       content,
+      idempotencyKey: outboundNotifierIdempotencyKey(ids, events[0].channelId, content),
     });
 
     if (result.ok) {
@@ -396,6 +409,22 @@ export class OutboundNotifier {
             notified_at = NOW(),
             updated_at = NOW(),
             payload = ${this.sql.json({ content, channelId: events[0].channelId })}
+        WHERE id IN ${this.sql(ids)}
+      `;
+      return;
+    }
+
+    if (result.pendingApproval) {
+      await this.sql`
+        UPDATE outbound_notifications
+        SET status = 'awaiting_approval',
+            updated_at = NOW(),
+            payload = ${this.sql.json({
+              content,
+              channelId: events[0].channelId,
+              externalActionRequestId: result.externalActionRequestId,
+              status: "awaiting_approval",
+            })}
         WHERE id IN ${this.sql(ids)}
       `;
       return;
@@ -416,9 +445,10 @@ export class OutboundNotifier {
     hiveId: string | null;
     channelId: string;
     content: string;
+    idempotencyKey?: string;
   }): Promise<NotifierSendResult> {
     const first = await this.sender(message);
-    if (first.ok) return first;
+    if (first.ok || first.pendingApproval) return first;
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     return this.sender(message);
   }
@@ -573,8 +603,23 @@ export function createOutboundNotifier(
           channelId: batch[0].channelId,
           content,
           hiveId: batch[0].hiveId,
+          idempotencyKey: outboundNotifierIdempotencyKey(ids, batch[0].channelId, content),
         });
-        if (!result.ok) throw new Error(result.error ?? "Discord send failed");
+        if (!result.ok && !result.pendingApproval) throw new Error(result.error ?? "Discord send failed");
+        if (result.pendingApproval) {
+          await sql`
+            UPDATE outbound_notifications
+            SET status = 'awaiting_approval',
+                updated_at = NOW(),
+                payload = ${sql.json({
+                  ...payload,
+                  externalActionRequestId: result.externalActionRequestId,
+                  policyReason: result.error,
+                })}
+            WHERE id IN ${sql(ids)}
+          `;
+          continue;
+        }
       }
       await sql`
         UPDATE outbound_notifications
@@ -635,40 +680,48 @@ export function startOutboundNotifier(sql: Sql): OutboundNotifierHandle | null {
 
 export async function sendDiscordChannelMessage(
   sql: Sql,
-  message: { hiveId: string | null; channelId: string; content: string },
+  message: { hiveId: string | null; channelId: string; content: string; idempotencyKey?: string },
 ): Promise<NotifierSendResult> {
   if (!message.hiveId) return { ok: false, error: "missing hive id" };
   const install = await loadEaDiscordInstall(sql, message.hiveId);
   if (!install) return { ok: false, error: "no active ea-discord connector install" };
+  if (message.channelId !== install.channelId) {
+    return { ok: false, error: "Discord channel does not match configured ea-discord channel" };
+  }
 
-  const res = await fetch(`https://discord.com/api/v10/channels/${message.channelId}/messages`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bot ${install.botToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ content: message.content }),
+  const result = await requestExternalAction(sql, {
+    hiveId: message.hiveId,
+    installId: install.installId,
+    operation: "send_channel",
+    args: { content: message.content },
+    actor: { type: "system", id: "outbound-notifier" },
+    idempotencyKey: message.idempotencyKey,
   });
 
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    return { ok: false, error: `Discord returned ${res.status} ${res.statusText} ${detail}`.trim() };
+  if (result.status === "succeeded") return { ok: true };
+  if (result.status === "awaiting_approval") {
+    return {
+      ok: false,
+      pendingApproval: true,
+      externalActionRequestId: result.requestId,
+      error: result.policyReason,
+    };
   }
-  return { ok: true };
+  return {
+    ok: false,
+    error: result.error ?? `Discord send ${result.status} by action policy: ${result.policyReason}`,
+  };
 }
 
 async function loadEaDiscordInstall(
   sql: Sql,
   hiveId: string,
-): Promise<{ channelId: string; botToken: string } | null> {
-  const encryptionKey = process.env.ENCRYPTION_KEY ?? "";
-  if (!encryptionKey) return null;
-
+): Promise<{ installId: string; channelId: string } | null> {
   const [install] = await sql<{
+    id: string;
     config: { channelId?: string };
-    credential_id: string | null;
   }[]>`
-    SELECT config, credential_id
+    SELECT id, config
     FROM connector_installs
     WHERE connector_slug = 'ea-discord'
       AND status = 'active'
@@ -676,22 +729,9 @@ async function loadEaDiscordInstall(
     ORDER BY created_at DESC
     LIMIT 1
   `;
-  if (!install?.credential_id) return null;
+  if (!install) return null;
 
   const channelId = install.config?.channelId;
   if (!channelId || !isDiscordSnowflake(channelId)) return null;
-
-  const [credential] = await sql<{ value: string }[]>`
-    SELECT value FROM credentials WHERE id = ${install.credential_id}
-  `;
-  if (!credential) return null;
-
-  try {
-    const parsed = JSON.parse(decrypt(credential.value, encryptionKey)) as Record<string, string>;
-    if (!parsed.botToken) return null;
-    return { channelId, botToken: parsed.botToken };
-  } catch (err) {
-    console.warn(`[notifier] failed to decrypt ea-discord credential: ${err instanceof Error ? err.message : String(err)}`);
-    return null;
-  }
+  return { installId: install.id, channelId };
 }

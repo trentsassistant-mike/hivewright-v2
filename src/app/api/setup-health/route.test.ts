@@ -47,7 +47,7 @@ describe("/api/setup-health", () => {
   it("reports the resolved hive workspace root", async () => {
     process.env.HIVES_WORKSPACE_ROOT = "/tmp/hw-health-hives";
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/setup-health"));
     const body = await res.json();
 
     expect(res.status).toBe(200);

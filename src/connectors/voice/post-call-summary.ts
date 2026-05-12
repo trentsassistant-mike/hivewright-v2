@@ -5,7 +5,7 @@ import {
   voiceSessionEvents,
 } from "@/db/schema/voice-sessions";
 import { sql } from "@/app/api/_lib/db";
-import { decrypt } from "@/credentials/encryption";
+import { requestExternalAction } from "@/actions/external-actions";
 
 /**
  * Discord's per-message character cap. We leave ~200 chars of headroom for
@@ -60,25 +60,19 @@ export function buildPostCallSummary(input: PostCallSummaryInput): string {
 }
 
 interface EaDiscordInstall {
+  installId: string;
   channelId: string;
-  botToken: string;
 }
 
 /**
  * Loads the active `ea-discord` connector install for `hiveId` and returns
- * the resolved bot token + channel, or `null` if none is available. Uses
- * the raw `sql` handle because the credential value lives in the
- * `credentials.value` column that this subsystem doesn't own a Drizzle
- * schema for. Matches the pattern used in `src/ea/native/index.ts`.
+ * the install/channel needed to request a governed outbound message.
  */
 async function loadEaDiscordInstall(
   hiveId: string,
 ): Promise<EaDiscordInstall | null> {
-  const encryptionKey = process.env.ENCRYPTION_KEY ?? "";
-  if (!encryptionKey) return null;
-
   const rows = (await sql`
-    SELECT id, config, credential_id
+    SELECT id, config
     FROM connector_installs
     WHERE connector_slug = 'ea-discord'
       AND status = 'active'
@@ -87,30 +81,13 @@ async function loadEaDiscordInstall(
   `) as unknown as {
     id: string;
     config: { channelId?: string };
-    credential_id: string | null;
   }[];
 
   const install = rows[0];
   if (!install) return null;
   const channelId = install.config?.channelId;
-  if (!channelId || !install.credential_id) return null;
-
-  const creds = (await sql`
-    SELECT value FROM credentials WHERE id = ${install.credential_id}
-  `) as unknown as { value: string }[];
-  const cred = creds[0];
-  if (!cred) return null;
-
-  try {
-    const parsed = JSON.parse(decrypt(cred.value, encryptionKey)) as Record<
-      string,
-      string
-    >;
-    if (!parsed.botToken) return null;
-    return { channelId, botToken: parsed.botToken };
-  } catch {
-    return null;
-  }
+  if (!channelId) return null;
+  return { installId: install.id, channelId };
 }
 
 async function claimPostCallSummaryPost(sessionId: string): Promise<boolean> {
@@ -187,22 +164,17 @@ export async function postCallSummary(
     const claimed = await claimPostCallSummaryPost(sessionId);
     if (!claimed) return;
 
-    const res = await fetch(
-      `https://discord.com/api/v10/channels/${install.channelId}/messages`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bot ${install.botToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ content: message }),
-      },
-    );
+    const result = await requestExternalAction(sql, {
+      hiveId,
+      installId: install.installId,
+      operation: "send_channel",
+      args: { content: message },
+      actor: { type: "system", id: "voice-post-call-summary" },
+    });
 
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
+    if (result.status !== "succeeded") {
       console.error(
-        `[voice] post-call summary Discord POST failed: ${res.status} ${res.statusText} ${detail}`,
+        `[voice] post-call summary Discord action ${result.status}: ${result.error ?? result.policyReason}`,
       );
     }
   } catch (err) {

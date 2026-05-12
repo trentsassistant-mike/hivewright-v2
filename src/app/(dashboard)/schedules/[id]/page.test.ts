@@ -23,7 +23,7 @@ vi.mock("@/schedules/detail", () => ({
   loadScheduleDetail: mocks.loadScheduleDetail,
 }));
 
-import { loadScheduleDetailForPage } from "./page";
+import { loadScheduleDetailForPage } from "./page.helpers";
 
 const detail = {
   schedule: {

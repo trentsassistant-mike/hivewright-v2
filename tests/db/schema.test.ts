@@ -31,6 +31,8 @@ describe("database schema", () => {
     expect(names).toContain("insights");
     expect(names).toContain("work_products");
     expect(names).toContain("memory_embeddings");
+    expect(names).toContain("action_policies");
+    expect(names).toContain("external_action_requests");
   });
 
   it("tasks table has NOTIFY trigger", async () => {

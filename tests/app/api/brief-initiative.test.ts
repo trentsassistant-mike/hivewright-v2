@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createBriefGetHandler } from "@/app/api/brief/route";
+import { createBriefGetHandler } from "@/app/api/brief/get-handler";
 import { testSql as sql, truncateAll } from "../../_lib/test-db";
 
 const HIVE = "aaaaaaaa-0000-0000-0000-000000000333";

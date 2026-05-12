@@ -44,7 +44,7 @@ describe("POST /api/voice/direct", () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.expiresIn).toBe(60);
-    expect(body.wsUrl).toMatch(/^wss:\/\/voice-host\.exampletailnet\.ts\.net\/api\/voice\/direct\/ws\?token=/);
+    expect(body.wsUrl).toMatch(/^wss:\/\/voice\.example\.ts\.net\/api\/voice\/direct\/ws\?token=/);
     expect(typeof body.sessionToken).toBe("string");
     // Round-trip: the minted token verifies and carries the right claims.
     const payload = verifyVoiceSessionToken(body.sessionToken);

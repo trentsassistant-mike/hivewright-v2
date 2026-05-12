@@ -96,6 +96,14 @@ describe("mapAgentObservabilityRows", () => {
 
     expect(result.history.agentLevel.totalRuns).toBe(1);
     expect(result.history.agentLevel.statusCounts).toEqual({ completed: 1 });
+    expect(result.usageSummary).toEqual({
+      totalRuns: 1,
+      completedRuns: 1,
+      failedRuns: 0,
+      recentDailyCounts: [
+        { date: "2026-05-10", count: 1 },
+      ],
+    });
     expect(result.history.taskLevel[0]).toMatchObject({
       id: "task-1",
       historyLevel: "task",
@@ -160,6 +168,12 @@ describe("mapAgentObservabilityRows", () => {
     });
 
     expect(result.history.agentLevel.totalRuns).toBe(0);
+    expect(result.usageSummary).toEqual({
+      totalRuns: 0,
+      completedRuns: 0,
+      failedRuns: 0,
+      recentDailyCounts: [],
+    });
     expect(result.history.emptyMessage).toBe("No agent-level run history has been recorded for this role.");
     expect(result.scheduleState).toEqual({
       kind: "no_schedule",

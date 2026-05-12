@@ -9,7 +9,7 @@ vi.mock("@/auth/users", () => ({
   canAccessHive: vi.fn(),
 }));
 
-import { createBriefGetHandler } from "@/app/api/brief/route";
+import { createBriefGetHandler } from "@/app/api/brief/get-handler";
 import { requireApiUser } from "@/app/api/_lib/auth";
 import { canAccessHive } from "@/auth/users";
 

@@ -32,6 +32,13 @@ type RouteSelectionHealthEvidence = {
   failureReason: string | null;
 };
 
+type EvidenceConfidence = "low" | "medium" | "high";
+
+type EvidencePackageRef = {
+  status: "not_available";
+  reason: string;
+};
+
 type RouteSelectionEvidence = {
   schemaVersion: 1;
   outcome: UnresolvableTriageOutcome;
@@ -48,6 +55,16 @@ type RouteSelectionEvidence = {
     supersedingTaskId: string | null;
     fixTaskId: string | null;
   };
+  source_confidence: EvidenceConfidence;
+  execution_confidence: EvidenceConfidence;
+  legacy_evidence_confidence: EvidenceConfidence;
+  packaging_schema_version: 1;
+  provider: string | null;
+  runtime: string | null;
+  trace_package_ref: EvidencePackageRef;
+  output_package_ref: EvidencePackageRef;
+  evaluation_package_ref: EvidencePackageRef;
+  capture_limitations: string[];
 };
 
 interface UnresolvableTaskRow {
@@ -441,10 +458,19 @@ function buildRouteSelectionEvidence(
     fixTaskId?: string | null;
   },
 ): RouteSelectionEvidence {
+  const route = input.route === undefined ? taskRoute(task) : input.route;
+  const sourceConfidence = buildSourceConfidence(task, route);
+  const executionConfidence = buildExecutionConfidence(input.health ?? null);
+  const limitations = [
+    "No retained trace package is attached to unresolvable triage routing evidence.",
+    "No retained output package is attached to unresolvable triage routing evidence.",
+    "No retained evaluation package is attached to unresolvable triage routing evidence.",
+  ];
+
   return {
     schemaVersion: 1,
     outcome: input.outcome,
-    route: input.route === undefined ? taskRoute(task) : input.route,
+    route,
     health: input.health ? {
       canRun: input.health.canRun,
       status: input.health.status,
@@ -462,6 +488,25 @@ function buildRouteSelectionEvidence(
       supersedingTaskId: input.supersedingTaskId ?? null,
       fixTaskId: input.fixTaskId ?? null,
     },
+    source_confidence: sourceConfidence,
+    execution_confidence: executionConfidence,
+    legacy_evidence_confidence: minEvidenceConfidence(sourceConfidence, executionConfidence),
+    packaging_schema_version: 1,
+    provider: route ? providerForRuntime(route.adapterType) : null,
+    runtime: route?.adapterType ?? null,
+    trace_package_ref: {
+      status: "not_available",
+      reason: "No retained trace package is available for this triage-only evidence surface.",
+    },
+    output_package_ref: {
+      status: "not_available",
+      reason: "No retained output package is available for this triage-only evidence surface.",
+    },
+    evaluation_package_ref: {
+      status: "not_available",
+      reason: "No retained evaluation package is available for this triage-only evidence surface.",
+    },
+    capture_limitations: limitations,
   };
 }
 
@@ -489,6 +534,40 @@ function taskRoute(task: UnresolvableTaskRow): { adapterType: string; modelId: s
   const modelId = (task.model_override ?? task.model_used)?.trim();
   if (!adapterType || !modelId) return null;
   return { adapterType, modelId };
+}
+
+function buildSourceConfidence(
+  task: UnresolvableTaskRow,
+  route: { adapterType: string; modelId: string } | null,
+): EvidenceConfidence {
+  return task.failure_reason && route ? "medium" : "low";
+}
+
+function buildExecutionConfidence(
+  health: ModelSpawnHealthDecision | null,
+): EvidenceConfidence {
+  return health ? "medium" : "low";
+}
+
+function minEvidenceConfidence(
+  left: EvidenceConfidence,
+  right: EvidenceConfidence,
+): EvidenceConfidence {
+  const rank: Record<EvidenceConfidence, number> = {
+    low: 0,
+    medium: 1,
+    high: 2,
+  };
+  return rank[left] <= rank[right] ? left : right;
+}
+
+function providerForRuntime(adapterType: string): string {
+  const normalized = adapterType.trim().toLowerCase();
+  if (normalized === "codex" || normalized.startsWith("openai")) return "openai";
+  if (normalized === "claude-code" || normalized.startsWith("claude")) return "anthropic";
+  if (normalized.startsWith("gemini")) return "google";
+  if (normalized === "ollama" || normalized === "openclaw") return "local";
+  return normalized;
 }
 
 function isRuntimeFailure(reason: string | null): boolean {

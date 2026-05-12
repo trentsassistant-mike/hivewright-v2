@@ -74,6 +74,25 @@ type RouteSelectionEvidence = {
     supersedingTaskId: string | null;
     fixTaskId: string | null;
   };
+  source_confidence: string;
+  execution_confidence: string;
+  legacy_evidence_confidence: string;
+  packaging_schema_version: number;
+  provider: string | null;
+  runtime: string | null;
+  trace_package_ref: {
+    status: string;
+    reason: string;
+  };
+  output_package_ref: {
+    status: string;
+    reason: string;
+  };
+  evaluation_package_ref: {
+    status: string;
+    reason: string;
+  };
+  capture_limitations: string[];
 };
 
 async function taskEvidence(taskId: string): Promise<RouteSelectionEvidence> {
@@ -105,9 +124,73 @@ function expectCommonEvidence(
   expect(evidence.context.reason).toContain(input.reasonIncludes);
 }
 
+function expectPolicyEvidence(
+  evidence: RouteSelectionEvidence,
+  input: {
+    provider: string | null;
+    runtime: string | null;
+    executionConfidence?: string;
+  },
+) {
+  const executionConfidence = input.executionConfidence ?? "low";
+  expect(evidence).toMatchObject({
+    source_confidence: "medium",
+    execution_confidence: executionConfidence,
+    legacy_evidence_confidence: executionConfidence,
+    packaging_schema_version: 1,
+    provider: input.provider,
+    runtime: input.runtime,
+    trace_package_ref: {
+      status: "not_available",
+    },
+    output_package_ref: {
+      status: "not_available",
+    },
+    evaluation_package_ref: {
+      status: "not_available",
+    },
+  });
+  expect(evidence.trace_package_ref.reason).toContain("trace");
+  expect(evidence.output_package_ref.reason).toContain("output");
+  expect(evidence.evaluation_package_ref.reason).toContain("evaluation");
+  expect(evidence.capture_limitations).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining("No retained trace package"),
+      expect.stringContaining("No retained output package"),
+      expect.stringContaining("No retained evaluation package"),
+    ]),
+  );
+}
+
 beforeEach(seedBase);
 
 describe("reconcileUnresolvableTasks", () => {
+  it("preserves provider-neutral evidence confidence and packaging metadata on task routing evidence", async () => {
+    const taskId = "12121212-1212-4212-8212-121212121212";
+    await insertUnresolvable({
+      id: taskId,
+      title: "Reconnect integration",
+      failureReason: "Connector permission denied for OAuth scope.",
+      adapterOverride: "claude-code",
+      modelOverride: "claude-sonnet-4.5",
+    });
+
+    const result = await reconcileUnresolvableTasks(sql, HIVE_ID, {
+      now: new Date("2026-05-05T00:00:00Z"),
+    });
+
+    expect(result.byOutcome.needs_ea_review).toBe(1);
+    const [decision] = await sql<{ route_metadata: RouteSelectionEvidence | null }[]>`
+      SELECT route_metadata FROM decisions WHERE task_id = ${taskId}
+    `;
+    const evidence = await taskEvidence(taskId);
+    expectPolicyEvidence(evidence, {
+      provider: "anthropic",
+      runtime: "claude-code",
+    });
+    expect(decision.route_metadata).toEqual(evidence);
+  });
+
   it("stores decision-linked evidence for genuinely owner-blocked tasks routed through EA review", async () => {
     const taskId = "33333333-3333-4333-8333-333333333333";
     await insertUnresolvable({
@@ -211,6 +294,11 @@ describe("reconcileUnresolvableTasks", () => {
       canRun: true,
       status: "healthy",
       reason: "fresh_healthy_probe",
+    });
+    expectPolicyEvidence(evidence, {
+      provider: "openai",
+      runtime: "codex",
+      executionConfidence: "medium",
     });
     expect(evidence.links).toEqual({
       decisionId: null,

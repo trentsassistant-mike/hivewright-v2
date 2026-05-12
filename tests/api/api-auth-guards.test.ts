@@ -133,10 +133,27 @@ function getActualAuthModule(): typeof import("@/app/api/_lib/auth") {
 }
 
 function completeRequest(body: unknown, headers: Record<string, string> = {}): Request {
+  const completionBody = typeof body === "object" && body !== null && !Array.isArray(body)
+    ? {
+        evidence: [
+          {
+            type: "artifact",
+            description: "Verified completion artifact exists.",
+            reference: "workspace://auth-guard-fixture",
+            verified: true,
+          },
+        ],
+        learningGate: {
+          category: "nothing",
+          rationale: "No reusable learning should be saved from this goal.",
+        },
+        ...body,
+      }
+    : body;
   return new Request("http://localhost/api/goals/x/complete", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...headers },
-    body: JSON.stringify(body),
+    body: JSON.stringify(completionBody),
   });
 }
 

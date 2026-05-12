@@ -244,6 +244,11 @@ describe("ClaudeCodeAdapter", () => {
       expect(args[tIdx + 1]).toBe("Bash,Read");
     });
 
+    it("rejects legacy Skill entries in toolsConfig.allowedTools", () => {
+      const ctx = makeCtx({ toolsConfig: { allowedTools: ["Bash", "Skill"] } });
+      expect(() => adapter.buildCommand(ctx)).toThrow(/skills:\s*\[\.\.\.\]/i);
+    });
+
     it("does not inject any --mcp-config when toolsConfig is null (backwards compat)", () => {
       const ctx = makeCtx({ toolsConfig: null });
       const args = adapter.buildCommand(ctx);

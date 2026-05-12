@@ -1,6 +1,6 @@
 import type { ChatProvider, ProviderId } from "@/llm";
 import { getChatProvider } from "@/llm";
-import { submitWorkIntake } from "@/app/api/work/route";
+import { submitWorkIntake } from "@/app/api/work/submit-work-intake";
 import { loadCredentials } from "@/credentials/manager";
 import { buildHiveContextBlock } from "@/hives/context";
 import { prependIdeaOriginPreface } from "@/ideas/origin";

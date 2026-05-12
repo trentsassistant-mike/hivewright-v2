@@ -106,6 +106,12 @@ export class ClaudeCodeAdapter implements Adapter {
         args.push("--strict-mcp-config");
       }
       if (ctx.toolsConfig.allowedTools && ctx.toolsConfig.allowedTools.length > 0) {
+        const invalidAllowedTool = ctx.toolsConfig.allowedTools.find((tool) => tool.trim().toLowerCase() === "skill");
+        if (invalidAllowedTool) {
+          throw new Error(
+            'Claude Code allowedTools must not contain "Skill"; migrate role skills to explicit `skills: [...]` entries instead.',
+          );
+        }
         args.push("--allowed-tools", ctx.toolsConfig.allowedTools.join(","));
       }
     }

@@ -1,7 +1,7 @@
 import { jsonError, jsonOk } from "../../../_lib/responses";
 import { sql } from "../../../_lib/db";
 import { requireApiUser } from "../../../_lib/auth";
-import { invokeConnector } from "@/connectors/runtime";
+import { requestExternalAction } from "@/actions/external-actions";
 import { getConnectorDefinition } from "@/connectors/registry";
 import { canMutateHive } from "@/auth/users";
 
@@ -45,7 +45,8 @@ export async function POST(
 
     const args = body.args ?? defaultTestArgs(def.slug, operation);
 
-    const result = await invokeConnector(sql, {
+    const result = await requestExternalAction(sql, {
+      hiveId: install.hiveId as string,
       installId: id,
       operation,
       args,

@@ -18,6 +18,14 @@
 import { validateHttpWebhookDestination } from "./http-webhook-safety";
 
 export type ConnectorAuthType = "api_key" | "oauth2" | "webhook" | "none";
+export type ConnectorEffectType = "read" | "notify" | "write" | "financial" | "destructive" | "system";
+export type ConnectorApprovalDefault = "allow" | "require_approval" | "block";
+
+export interface ConnectorOperationGovernance {
+  effectType: ConnectorEffectType;
+  defaultDecision: ConnectorApprovalDefault;
+  summary?: string;
+}
 
 /**
  * OAuth2 tokens persisted per-install in the credentials table. Stored as
@@ -45,6 +53,7 @@ export interface ConnectorOperation {
   label: string;
   /** JSON-schema-ish argument spec for dashboard "Test" forms. */
   args?: ConnectorSetupField[];
+  governance: ConnectorOperationGovernance;
   handler: (ctx: ConnectorInvocationContext) => Promise<unknown>;
 }
 
@@ -128,6 +137,11 @@ const discordWebhook: ConnectorDefinition = {
     {
       slug: "send_message",
       label: "Send a message",
+      governance: {
+        effectType: "notify",
+        defaultDecision: "require_approval",
+        summary: "Posts a message to the configured Discord webhook channel.",
+      },
       args: [
         { key: "content", label: "Message text", type: "textarea", required: true },
       ],
@@ -186,6 +200,11 @@ const slackWebhook: ConnectorDefinition = {
     {
       slug: "send_message",
       label: "Send a message",
+      governance: {
+        effectType: "notify",
+        defaultDecision: "require_approval",
+        summary: "Posts a message to the configured Slack webhook channel.",
+      },
       args: [
         { key: "text", label: "Text", type: "textarea", required: true },
       ],
@@ -248,6 +267,11 @@ const httpWebhook: ConnectorDefinition = {
     {
       slug: "post_json",
       label: "POST JSON",
+      governance: {
+        effectType: "write",
+        defaultDecision: "require_approval",
+        summary: "Sends a JSON POST to the configured HTTP endpoint.",
+      },
       args: [
         { key: "body", label: "Body (JSON)", type: "textarea", required: true },
       ],
@@ -316,6 +340,11 @@ const smtpEmail: ConnectorDefinition = {
     {
       slug: "send_email",
       label: "Send email",
+      governance: {
+        effectType: "notify",
+        defaultDecision: "require_approval",
+        summary: "Sends an outbound email via the configured SMTP account.",
+      },
       args: [
         { key: "to", label: "To", type: "text", required: true },
         { key: "subject", label: "Subject", type: "text", required: true },
@@ -380,6 +409,11 @@ const githubPat: ConnectorDefinition = {
     {
       slug: "list_issues",
       label: "List open issues",
+      governance: {
+        effectType: "read",
+        defaultDecision: "allow",
+        summary: "Reads open issue metadata from the configured GitHub repository.",
+      },
       args: [
         { key: "owner", label: "Owner", type: "text" },
         { key: "repo", label: "Repo", type: "text" },
@@ -434,6 +468,11 @@ const stripe: ConnectorDefinition = {
     {
       slug: "list_recent_charges",
       label: "List recent charges",
+      governance: {
+        effectType: "financial",
+        defaultDecision: "allow",
+        summary: "Reads recent Stripe charge metadata without creating or modifying payments.",
+      },
       args: [{ key: "limit", label: "Limit (default 10)", type: "text" }],
       handler: async ({ secrets, args }) => {
         const limit = Number(args.limit ?? 10);
@@ -480,6 +519,11 @@ const twilioSms: ConnectorDefinition = {
     {
       slug: "send_sms",
       label: "Send SMS",
+      governance: {
+        effectType: "notify",
+        defaultDecision: "require_approval",
+        summary: "Sends an outbound SMS via the configured Twilio account.",
+      },
       args: [
         { key: "to", label: "To (E.164)", type: "text", required: true },
         { key: "body", label: "Message", type: "textarea", required: true },
@@ -556,6 +600,11 @@ const voiceEa: ConnectorDefinition = {
     {
       slug: "test_connection",
       label: "Test connection",
+      governance: {
+        effectType: "system",
+        defaultDecision: "allow",
+        summary: "Checks connectivity to the configured voice services health endpoint.",
+      },
       args: [],
       handler: async ({ config }) => {
         const url = String(config.voiceServicesUrl ?? "").replace(/\/$/, "");
@@ -607,6 +656,11 @@ const gmail: ConnectorDefinition = {
     {
       slug: "list_threads",
       label: "List recent threads",
+      governance: {
+        effectType: "read",
+        defaultDecision: "allow",
+        summary: "Reads recent Gmail thread metadata using the OAuth readonly scope.",
+      },
       args: [
         { key: "query", label: "Search query", type: "text", placeholder: "is:unread" },
         { key: "maxResults", label: "Max results (default 10)", type: "text" },
@@ -633,6 +687,11 @@ const gmail: ConnectorDefinition = {
     {
       slug: "send_email",
       label: "Send an email",
+      governance: {
+        effectType: "notify",
+        defaultDecision: "require_approval",
+        summary: "Sends an outbound email from the connected Gmail account.",
+      },
       args: [
         { key: "to", label: "To", type: "text", required: true },
         { key: "subject", label: "Subject", type: "text", required: true },
@@ -749,6 +808,11 @@ const eaDiscord: ConnectorDefinition = {
     {
       slug: "self_test",
       label: "Test connection",
+      governance: {
+        effectType: "system",
+        defaultDecision: "allow",
+        summary: "Verifies the Discord bot token and returns configured EA connection details.",
+      },
       args: [],
       handler: async ({ config, secrets }) => {
         const token = secrets.botToken;
@@ -767,6 +831,39 @@ const eaDiscord: ConnectorDefinition = {
           channelId: config.channelId,
           note: "After saving, restart the dispatcher to take the EA online. The dispatcher auto-registers /status and /new on startup.",
         };
+      },
+    },
+    {
+      slug: "send_channel",
+      label: "Send Discord channel message",
+      governance: {
+        effectType: "notify",
+        defaultDecision: "require_approval",
+        summary: "Posts a system/EA notification to the configured Discord channel through the EA bot.",
+      },
+      args: [
+        { key: "content", label: "Message text", type: "textarea", required: true },
+      ],
+      handler: async ({ config, secrets, args }) => {
+        const token = secrets.botToken;
+        if (!token) throw new Error("botToken missing");
+        const channelId = config.channelId;
+        if (typeof channelId !== "string" || !channelId) throw new Error("channelId missing");
+        const content = typeof args.content === "string" ? args.content : "";
+        if (!content.trim()) throw new Error("content missing");
+        const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bot ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ content }),
+        });
+        if (!res.ok) {
+          const detail = await res.text().catch(() => "");
+          throw new Error(`Discord returned ${res.status} ${res.statusText} ${detail}`.trim());
+        }
+        return { ok: true, channelId };
       },
     },
   ],
@@ -806,6 +903,7 @@ export function toPublicConnector(c: ConnectorDefinition) {
     operations: c.operations.map((op) => ({
       slug: op.slug,
       label: op.label,
+      governance: op.governance,
       args: op.args ?? [],
     })),
     requiresDispatcherRestart: c.requiresDispatcherRestart ?? false,

@@ -271,13 +271,12 @@ export function buildOperationsMapModel(params: {
   // Critical items — placed under their linked goal so the relationship is visible.
   for (const item of criticalItems) {
     const isHistorical = item.liveBlocking === false;
-    const cluster = getCluster({
-      goalId: item.goalId ?? null,
-      goalTitle: item.goalTitle ?? null,
-      goalStatus: item.goalStatus ?? null,
-    });
-
     if (isHistorical && item.sourceType === "task") {
+      const cluster = getCluster({
+        goalId: item.goalId ?? null,
+        goalTitle: item.goalTitle ?? null,
+        goalStatus: item.goalStatus ?? null,
+      });
       cluster.historicalFailureCount += 1;
       // Still surface a node, but as history so it never lights up critical.
       cluster.tasks.push({
@@ -293,7 +292,17 @@ export function buildOperationsMapModel(params: {
       });
       continue;
     }
+    if (isHistorical) {
+      // Historical decisions should not appear as live blockers or linger as
+      // stale topology nodes once the linked goal has already finished.
+      continue;
+    }
 
+    const cluster = getCluster({
+      goalId: item.goalId ?? null,
+      goalTitle: item.goalTitle ?? null,
+      goalStatus: item.goalStatus ?? null,
+    });
     const state = criticalItemState(item);
     cluster.tasks.push({
       id: `${item.sourceType}-${item.id}`,

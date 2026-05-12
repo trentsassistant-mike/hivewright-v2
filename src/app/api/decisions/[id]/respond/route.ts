@@ -5,9 +5,10 @@ import { TASK_QUALITY_FEEDBACK_DECISION_KIND } from "@/quality/owner-feedback-sa
 import { maybeCreateQualityDoctorForSignal } from "@/quality/doctor";
 import { mirrorOwnerDecisionCommentToGoalComment } from "@/decisions/owner-comment-wake";
 import { decisionEventForResponse, recordDecisionAuditEvent } from "../../_audit";
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import { createOrUpdateSkillCandidateFromSignal } from "@/skills/self-creation";
 import { applyApprovedLearningGateFollowup, LEARNING_GATE_FOLLOWUP_DECISION_KIND } from "@/goals/learning-gate-approval";
+import { executeApprovedExternalAction, rejectExternalAction, type ExecuteExternalActionResult } from "@/actions/external-actions";
 
 const DIRECT_TASK_QA_CAP_ACTIONS = [
   "retry_with_different_role",
@@ -20,6 +21,8 @@ type DirectTaskQaCapAction = (typeof DIRECT_TASK_QA_CAP_ACTIONS)[number];
 const QUALITY_FEEDBACK_RESPONSES = ["quality_feedback", "dismiss_quality_feedback"] as const;
 type QualityFeedbackResponse = (typeof QUALITY_FEEDBACK_RESPONSES)[number];
 const MAX_RESPONSE_COMMENT_LENGTH = 2000;
+const EXTERNAL_ACTION_APPROVAL_DECISION_KIND = "external_action_approval";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const RELEASE_SCAN_MODEL_PROPOSAL_KINDS = new Set([
   "release_scan_model_proposal",
@@ -46,6 +49,13 @@ type DecisionRowForModelProposal = {
   options: unknown;
   kind: string;
   route_metadata: unknown;
+  priority?: string;
+  status?: string;
+  owner_response?: string | null;
+  selected_option_key?: string | null;
+  selected_option_label?: string | null;
+  created_at?: Date;
+  resolved_at?: Date | null;
   is_qa_fixture: boolean;
 };
 
@@ -122,6 +132,46 @@ function getNamedDecisionOptions(value: unknown): NamedDecisionOption[] {
 
 function findNamedDecisionOption(value: unknown, key: string): NamedDecisionOption | null {
   return getNamedDecisionOptions(value).find((option) => option.key === key) ?? null;
+}
+
+function responseForExternalActionOption(option: NamedDecisionOption): ValidResponse | null {
+  if (option.key === "approve") {
+    return "approved";
+  }
+  if (option.key === "reject") {
+    return "rejected";
+  }
+  return null;
+}
+
+function externalActionRequestIdFromMetadata(routeMetadata: unknown): string | null {
+  if (!isRecord(routeMetadata)) return null;
+  const requestId = stringField(routeMetadata, ["externalActionRequestId", "external_action_request_id"]);
+  return requestId && UUID_RE.test(requestId) ? requestId : null;
+}
+
+async function validateExternalActionDecisionLink(
+  decisionId: string,
+  hiveId: string,
+  routeMetadata: unknown,
+): Promise<string | Response> {
+  const requestId = externalActionRequestIdFromMetadata(routeMetadata);
+  if (!requestId) {
+    return jsonError("External action approval decision is missing a valid external action request id", 400);
+  }
+
+  const [request] = await sql<{ id: string }[]>`
+    SELECT id
+    FROM external_action_requests
+    WHERE id = ${requestId}::uuid
+      AND hive_id = ${hiveId}::uuid
+      AND decision_id = ${decisionId}::uuid
+    LIMIT 1
+  `;
+  if (!request) {
+    return jsonError("External action approval decision references an external action request that was not found for this hive", 400);
+  }
+  return requestId;
 }
 
 function extractReleaseScanModelPayload(
@@ -458,16 +508,33 @@ export async function POST(
     let response = rawResponse;
 
     const [decisionForAuth] = await sql<
-      { hive_id: string; kind: string; options: unknown; status: string; is_qa_fixture: boolean }[]
+      {
+        hive_id: string;
+        kind: string;
+        options: unknown;
+        route_metadata: unknown;
+        status: string;
+        owner_response: string | null;
+        is_qa_fixture: boolean;
+      }[]
     >`
-      SELECT hive_id, kind, options, status, is_qa_fixture FROM decisions WHERE id = ${id}
+      SELECT hive_id, kind, options, route_metadata, status, owner_response, is_qa_fixture FROM decisions WHERE id = ${id}
     `;
     if (!decisionForAuth) {
       return jsonError("Decision not found", 404);
     }
     if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, decisionForAuth.hive_id);
-      if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
+      const authorized = decisionForAuth.kind === EXTERNAL_ACTION_APPROVAL_DECISION_KIND
+        ? await canMutateHive(sql, user.id, decisionForAuth.hive_id)
+        : await canAccessHive(sql, user.id, decisionForAuth.hive_id);
+      if (!authorized) {
+        return jsonError(
+          decisionForAuth.kind === EXTERNAL_ACTION_APPROVAL_DECISION_KIND
+            ? "Forbidden: caller cannot approve external actions for this hive"
+            : "Forbidden: caller cannot access this hive",
+          403,
+        );
+      }
     }
 
     let selectedOption: NamedDecisionOption | null = null;
@@ -476,7 +543,11 @@ export async function POST(
       if (!selectedOption) {
         return jsonError("Selected option was not found on this decision", 400);
       }
-      response = response ?? selectedOption.response ?? "approved";
+      response = response ?? selectedOption.response ?? (
+        decisionForAuth.kind === EXTERNAL_ACTION_APPROVAL_DECISION_KIND
+          ? responseForExternalActionOption(selectedOption)
+          : null
+      ) ?? "approved";
     }
 
     if (
@@ -489,12 +560,36 @@ export async function POST(
       );
     }
 
+    if (decisionForAuth.kind === EXTERNAL_ACTION_APPROVAL_DECISION_KIND) {
+      if (!requestedOptionKey || !selectedOption) {
+        return jsonError("External action decisions require selectedOptionKey 'approve' or 'reject'", 400);
+      }
+      const optionResponse = responseForExternalActionOption(selectedOption);
+      if (response !== optionResponse) {
+        return jsonError(
+          `External action response must match selectedOptionKey '${selectedOption.key}'`,
+          400,
+        );
+      }
+    }
+
     const normalisedRating = normaliseQualityRating(rating);
     if (isQualityFeedbackResponse(response) && !isTaskQualityFeedbackDecision(decisionForAuth)) {
       return jsonError("Quality feedback responses are only valid for task quality feedback decisions", 400);
     }
     if (response === "quality_feedback" && normalisedRating === null) {
       return jsonError("rating must be an integer from 1 to 10", 400);
+    }
+
+    let externalActionRequestId: string | null = null;
+    if (decisionForAuth.kind === EXTERNAL_ACTION_APPROVAL_DECISION_KIND) {
+      const validated = await validateExternalActionDecisionLink(
+        id,
+        decisionForAuth.hive_id,
+        decisionForAuth.route_metadata,
+      );
+      if (validated instanceof Response) return validated;
+      externalActionRequestId = validated;
     }
 
     const optionLabel = selectedOption?.label ??
@@ -511,7 +606,104 @@ export async function POST(
         ? `${response}: ${normalisedComment}`
         : response;
 
+    if (
+      response === "approved" &&
+      decisionForAuth.status !== "resolved" &&
+      typeof decisionForAuth.owner_response === "string" &&
+      decisionForAuth.owner_response.startsWith("discussed") &&
+      extractReleaseScanModelPayload(decisionForAuth)
+    ) {
+      return jsonError(
+        "Decision was already discussed; create a new decision before approving this release-scan proposal.",
+        409,
+      );
+    }
+
     if (response !== "discussed" && decisionForAuth.status === "resolved") {
+      const existingRows = await sql`
+        SELECT id, hive_id, goal_id, title, context, recommendation, options, route_metadata,
+               priority, status, kind, owner_response,
+               selected_option_key, selected_option_label, created_at, resolved_at,
+               task_id, is_qa_fixture
+        FROM decisions
+        WHERE id = ${id}
+      `;
+      const existingDecision = existingRows[0] as DecisionRowForModelProposal | undefined;
+      const recordedApproval =
+        existingDecision?.selected_option_key === "approve" ||
+        existingDecision?.owner_response === "approved" ||
+        existingDecision?.owner_response?.startsWith("approved:");
+      const recordedRejection =
+        existingDecision?.selected_option_key === "reject" ||
+        existingDecision?.owner_response === "rejected" ||
+        existingDecision?.owner_response?.startsWith("rejected:");
+      const sameRecordedResponse =
+        (response === "approved" && recordedApproval) ||
+        (response === "rejected" && recordedRejection);
+      if (existingDecision && externalActionRequestId && sameRecordedResponse) {
+        const externalActionResult = response === "approved"
+          ? await executeApprovedExternalAction(sql, {
+              requestId: externalActionRequestId,
+              decisionId: id,
+              hiveId: decisionForAuth.hive_id,
+              actor: user.id,
+            })
+          : (await rejectExternalAction(sql, {
+              requestId: externalActionRequestId,
+              decisionId: id,
+              hiveId: decisionForAuth.hive_id,
+              actor: user.id,
+            }), { requestId: externalActionRequestId, status: "rejected" as const });
+        return jsonOk({
+          id: existingDecision.id,
+          hiveId: existingDecision.hive_id,
+          goalId: existingDecision.goal_id,
+          taskId: existingDecision.task_id,
+          title: existingDecision.title,
+          context: existingDecision.context,
+          recommendation: existingDecision.recommendation,
+          options: existingDecision.options,
+          kind: existingDecision.kind,
+          routeMetadata: existingDecision.route_metadata,
+          priority: existingDecision.priority,
+          status: existingDecision.status,
+          ownerResponse: existingDecision.owner_response,
+          selectedOptionKey: existingDecision.selected_option_key,
+          selectedOptionLabel: existingDecision.selected_option_label,
+          createdAt: existingDecision.created_at,
+          resolvedAt: existingDecision.resolved_at,
+          queuedTaskId: null,
+          learningGateApproval: null,
+          externalActionResult,
+        });
+      }
+      if (response === "approved" && recordedApproval && existingDecision) {
+        const queuedTaskId = await queueModelRegistryPatchTaskIfNeeded(existingDecision);
+        if (queuedTaskId) {
+          return jsonOk({
+            id: existingDecision.id,
+            hiveId: existingDecision.hive_id,
+            goalId: existingDecision.goal_id,
+            taskId: existingDecision.task_id,
+            title: existingDecision.title,
+            context: existingDecision.context,
+            recommendation: existingDecision.recommendation,
+            options: existingDecision.options,
+            kind: existingDecision.kind,
+            routeMetadata: existingDecision.route_metadata,
+            priority: existingDecision.priority,
+            status: existingDecision.status,
+            ownerResponse: existingDecision.owner_response,
+            selectedOptionKey: existingDecision.selected_option_key,
+            selectedOptionLabel: existingDecision.selected_option_label,
+            createdAt: existingDecision.created_at,
+            resolvedAt: existingDecision.resolved_at,
+            queuedTaskId,
+            learningGateApproval: null,
+            externalActionResult: null,
+          });
+        }
+      }
       return jsonError(
         "Decision is already resolved; create a new decision or discussion comment instead of changing the recorded response.",
         409,
@@ -647,6 +839,24 @@ export async function POST(
     }
 
     const decisionRow = rows[0] as DecisionRowForModelProposal;
+    let externalActionResult: ExecuteExternalActionResult | { requestId: string; status: "rejected" } | null = null;
+
+    if (externalActionRequestId && response === "approved") {
+      externalActionResult = await executeApprovedExternalAction(sql, {
+        requestId: externalActionRequestId,
+        decisionId: id,
+        hiveId: decisionForAuth.hive_id,
+        actor: user.id,
+      });
+    } else if (externalActionRequestId && response === "rejected") {
+      await rejectExternalAction(sql, {
+        requestId: externalActionRequestId,
+        decisionId: id,
+        hiveId: decisionForAuth.hive_id,
+        actor: user.id,
+      });
+      externalActionResult = { requestId: externalActionRequestId, status: "rejected" };
+    }
 
     if (isDirectTaskQaCapAction(response)) {
       await applyDirectTaskQaCapResponse(decisionRow, response, normalisedComment);
@@ -698,6 +908,7 @@ export async function POST(
         ratingProvided: normalisedRating !== null,
         queuedTaskId,
         learningGateApproval,
+        externalActionResult,
       },
     });
 
@@ -721,6 +932,7 @@ export async function POST(
       resolvedAt: r.resolved_at,
       queuedTaskId,
       learningGateApproval,
+      externalActionResult,
     });
   } catch {
     return jsonError("Failed to respond to decision", 500);

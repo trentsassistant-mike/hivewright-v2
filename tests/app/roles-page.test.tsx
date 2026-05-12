@@ -322,6 +322,12 @@ describe("RolesPage", () => {
               taskLevel: [],
               emptyMessage: "No agent-level run history has been recorded for this role.",
             },
+            usageSummary: {
+              totalRuns: 0,
+              completedRuns: 0,
+              failedRuns: 0,
+              recentDailyCounts: [],
+            },
             scheduleState: {
               kind: "no_schedule",
               label: "No schedule",
@@ -378,7 +384,183 @@ describe("RolesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
 
     expect(await screen.findByText("No explicit MCP tools are configured for this role.")).toBeTruthy();
+    expect(screen.getByText("No usage trend is available for this agent yet.")).toBeTruthy();
     expect(screen.getByText("Owner GitHub")).toBeTruthy();
+  });
+
+  it("renders populated observability panel with agent and task level data", async () => {
+    const populatedObservability = {
+      role: { slug: "dev-agent", name: "Dev Agent", department: "eng", type: "executor" },
+      scope: { hiveId: "hive-1" },
+      history: {
+        agentLevel: {
+          historyLevel: "agent",
+          totalRuns: 3,
+          statusCounts: { completed: 2, blocked: 1 },
+          lastRunAt: "2026-05-11T10:00:00.000Z",
+        },
+        taskLevel: [
+          {
+            historyLevel: "task",
+            id: "task-1",
+            title: "Build observability slice",
+            status: "completed",
+            createdAt: "2026-05-11T09:00:00.000Z",
+            startedAt: "2026-05-11T09:01:00.000Z",
+            completedAt: "2026-05-11T09:20:00.000Z",
+            parentTaskId: null,
+            goalId: "goal-1",
+            createdBy: "scheduler",
+            modelUsed: "openai-codex/gpt-5.5",
+          },
+          {
+            historyLevel: "task",
+            id: "task-2",
+            title: "Fix auth regression",
+            status: "blocked",
+            createdAt: "2026-05-11T10:00:00.000Z",
+            startedAt: "2026-05-11T10:01:00.000Z",
+            completedAt: null,
+            parentTaskId: null,
+            goalId: "goal-2",
+            createdBy: "goal-supervisor",
+            modelUsed: "anthropic/claude-opus-4-7",
+          },
+        ],
+        emptyMessage: null,
+      },
+      usageSummary: {
+        totalRuns: 3,
+        completedRuns: 2,
+        failedRuns: 0,
+        recentDailyCounts: [
+          { date: "2026-05-10", count: 1 },
+          { date: "2026-05-11", count: 2 },
+        ],
+      },
+      scheduleState: {
+        kind: "scheduled",
+        label: "1 schedule",
+        message: null,
+        schedules: [
+          {
+            id: "schedule-1",
+            cronExpression: "0 9 * * *",
+            enabled: true,
+            lastRunAt: "2026-05-10T23:00:00.000Z",
+            nextRunAt: "2026-05-11T23:00:00.000Z",
+            kind: "daily",
+            title: "Daily research",
+          },
+        ],
+      },
+      tools: [
+        { slug: "github", label: "GitHub", source: "role-mcp" },
+        { slug: "context7", label: "Context7 Docs", source: "role-mcp" },
+      ],
+      toolsEmptyMessage: null,
+      connectedApps: [
+        { id: "install-1", connectorSlug: "github", displayName: "Owner GitHub", status: "active" },
+      ],
+      connectedAppsEmptyMessage: null,
+      memory: {
+        roleMemory: [
+          { id: "mem-1", sourceTaskId: "task-1", confidence: 0.9, sensitivity: "internal", createdAt: "2026-05-11T00:00:00.000Z", updatedAt: "2026-05-11T00:00:00.000Z" },
+        ],
+        hiveMemory: [
+          { id: "hmem-1", sourceTaskId: "task-1", category: "general", confidence: 0.8, sensitivity: "confidential", createdAt: "2026-05-11T00:00:00.000Z", updatedAt: "2026-05-11T00:00:00.000Z" },
+        ],
+        emptyMessage: null,
+      },
+      files: {
+        attachments: [
+          { id: "att-1", taskId: "task-1", filename: "brief.pdf", mimeType: "application/pdf", sizeBytes: 1234, uploadedAt: "2026-05-10T22:59:00.000Z" },
+        ],
+        workProducts: [
+          { id: "wp-1", taskId: "task-1", artifactKind: "report", fileLabel: "report.md", mimeType: "text/markdown", sensitivity: "internal", createdAt: "2026-05-11T00:06:00.000Z" },
+        ],
+        emptyMessage: null,
+      },
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/roles/dev-agent/observability")) {
+        return jsonResponse({ data: populatedObservability });
+      }
+      if (url.includes("/api/roles")) {
+        return jsonResponse({
+          data: [{
+            slug: "dev-agent",
+            name: "Dev Agent",
+            department: "eng",
+            type: "executor",
+            recommendedModel: "openai-codex/gpt-5.4",
+            fallbackModel: null,
+            adapterType: "codex",
+            fallbackAdapterType: null,
+            skills: [],
+            active: true,
+            toolsConfig: { mcps: ["github"] },
+            concurrencyLimit: 1,
+            provisionStatus: { satisfied: true, fixable: false, reason: null },
+            activeCount: 0,
+            runningCount: 0,
+          }],
+        });
+      }
+      if (url.includes("/api/ollama/models") || url.includes("/api/mcp-catalog")) {
+        return jsonResponse({ data: [] });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+
+    render(<RolesPage />);
+
+    await waitFor(() => expect(screen.getByText("Dev Agent")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
+
+    // Agent-level badge and run count
+    expect(await screen.findByText("Agent")).toBeTruthy();
+    expect(screen.getByText("3 recent runs")).toBeTruthy();
+    expect(screen.getByText("completed: 2")).toBeTruthy();
+    expect(screen.getByText("blocked: 1")).toBeTruthy();
+
+    // Task-level badge and table — "Task" may appear elsewhere so check heading
+    expect(screen.getByText("Execution history")).toBeTruthy();
+    expect(screen.getByText("Build observability slice")).toBeTruthy();
+    expect(screen.getByText("Fix auth regression")).toBeTruthy();
+    // Model column shows short model names (may also appear in model picker)
+    expect(screen.getAllByText("gpt-5.5").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("claude-opus-4-7").length).toBeGreaterThanOrEqual(1);
+    // Created by column
+    expect(screen.getAllByText("scheduler").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("goal-supervisor").length).toBeGreaterThanOrEqual(1);
+
+    // Schedule state
+    expect(screen.getByText("Daily research")).toBeTruthy();
+
+    // Tools
+    expect(screen.getByText("GitHub")).toBeTruthy();
+    expect(screen.getByText("Context7 Docs")).toBeTruthy();
+
+    // Connected apps
+    expect(screen.getByText("Owner GitHub")).toBeTruthy();
+
+    // Memory metadata
+    expect(screen.getByText(/role memory mem-1/)).toBeTruthy();
+    expect(screen.getByText(/hive memory hmem-1/)).toBeTruthy();
+
+    // Files
+    expect(screen.getByText("brief.pdf")).toBeTruthy();
+    expect(screen.getByText("report.md")).toBeTruthy();
+
+    // Usage trend chart (daily counts rendered as bars)
+    expect(screen.getByRole("img", { name: "Daily usage trend" })).toBeTruthy();
+
+    // Verify no sensitive data leaked
+    expect(JSON.stringify(fetchMock.mock.results)).not.toMatch(/credential|token|raw private/i);
   });
 
   it("offers and saves Gemini 3.1 Flash Live Preview through the roles model picker", async () => {

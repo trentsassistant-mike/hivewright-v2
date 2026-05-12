@@ -57,6 +57,12 @@ describe("GET /api/roles/[slug]/observability", () => {
         ],
         emptyMessage: null,
       },
+      usageSummary: {
+        totalRuns: 1,
+        completedRuns: 1,
+        failedRuns: 0,
+        recentDailyCounts: [{ date: "2026-05-11", count: 1 }],
+      },
       scheduleState: {
         kind: "scheduled",
         label: "1 schedule",
@@ -99,6 +105,12 @@ describe("GET /api/roles/[slug]/observability", () => {
     expect(mocks.loadAgentObservability).toHaveBeenCalledWith(mocks.sql, "dev-agent", { hiveId: "hive-1" });
     expect(body.data.history.agentLevel.historyLevel).toBe("agent");
     expect(body.data.history.taskLevel[0].historyLevel).toBe("task");
+    expect(body.data.usageSummary).toEqual({
+      totalRuns: 1,
+      completedRuns: 1,
+      failedRuns: 0,
+      recentDailyCounts: [{ date: "2026-05-11", count: 1 }],
+    });
     expect(JSON.stringify(body)).not.toMatch(/credential|token|raw private/i);
   });
 

@@ -8,12 +8,12 @@ import { hiveProjectsPath } from "@/hives/workspace-root";
 
 const HIVE_SLUG_REGEX = /^[a-z0-9][a-z0-9-]{1,63}$/;
 
-export async function GET(request?: Request) {
+export async function GET(request: Request) {
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
   try {
     const includeSystemFixtures =
-      request ? new URL(request.url).searchParams.get("includeSystemFixtures") === "true" : false;
+      new URL(request.url).searchParams.get("includeSystemFixtures") === "true";
     const rows = authz.user.isSystemOwner
       ? includeSystemFixtures
         ? await sql`

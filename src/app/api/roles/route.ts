@@ -32,12 +32,11 @@ async function checkRole(adapterType: string, slug: string, recommendedModel: st
   }
 }
 
-export async function GET(request?: Request) {
+export async function GET(request: Request) {
   const unauth = await requireApiAuth();
   if (unauth) return unauth;
   try {
-    const url = request ? new URL(request.url) : null;
-    const includeInactive = url?.searchParams.get("includeInactive") === "true";
+    const includeInactive = new URL(request.url).searchParams.get("includeInactive") === "true";
 
     const rows = await sql`
       SELECT

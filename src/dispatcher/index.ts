@@ -782,11 +782,13 @@ export class Dispatcher {
           chunk: `Starting task: ${task.title}`,
           type: "status",
         });
-        await writeTaskContextProvenanceLog(this.sql, {
-          taskId: task.id,
-          goalId,
-          provenance: buildSessionContextProvenance(ctx),
-        });
+        if (adapterType !== "codex") {
+          await writeTaskContextProvenanceLog(this.sql, {
+            taskId: task.id,
+            goalId,
+            provenance: buildSessionContextProvenance(ctx),
+          });
+        }
       } catch { /* ignore — streaming is best-effort */ }
 
       // Callback provided to the adapter: each stdout/stderr buffer triggers a
@@ -899,6 +901,16 @@ export class Dispatcher {
             });
           } catch { /* ignore */ }
         }
+      }
+
+      if (adapterType === "codex") {
+        try {
+          await writeTaskContextProvenanceLog(this.sql, {
+            taskId: task.id,
+            goalId,
+            provenance: buildSessionContextProvenance(ctx),
+          });
+        } catch { /* ignore */ }
       }
 
       // Write terminal "done" chunk. Because execute() awaits all pending onChunk

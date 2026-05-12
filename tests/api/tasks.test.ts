@@ -31,7 +31,7 @@ beforeEach(async () => {
 
 describe("GET /api/hives", () => {
   it("returns list of hives", async () => {
-    const res = await getHives();
+    const res = await getHives(new Request("http://localhost:3000/api/hives"));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.data).toBeInstanceOf(Array);

@@ -24,7 +24,7 @@ vi.mock("../initiative-runs/queries", () => ({
   summarizeInitiativeRun: mocks.summarizeInitiativeRun,
 }));
 
-import { createBriefGetHandler } from "./route";
+import { createBriefGetHandler } from "./get-handler";
 
 function createDb() {
   return vi.fn((strings: TemplateStringsArray) => {

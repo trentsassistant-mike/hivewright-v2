@@ -159,6 +159,7 @@ export function buildDashboardNavigation({
         { id: "setup", href: "/setup", label: "Setup", isActive: (pathname) => pathname === "/setup" },
         { id: "models", href: "/setup/models", label: "Models" },
         { id: "connectors", href: "/setup/connectors", label: "Connectors" },
+        { id: "action-policies", href: "/setup/action-policies", label: "Action Policies" },
         { id: "setup-health", href: "/setup/health", label: "Setup Health" },
         { id: "embedding-settings", href: "/setup/embeddings", label: "Embedding settings" },
         { id: "updates", href: "/setup/updates", label: "Updates" },

@@ -3,7 +3,7 @@ import { beforeEach, describe, it, expect, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   select: vi.fn(),
   sql: vi.fn(),
-  decrypt: vi.fn(),
+  requestExternalAction: vi.fn(),
 }));
 
 vi.mock("@/db", () => ({
@@ -16,8 +16,8 @@ vi.mock("@/app/api/_lib/db", () => ({
   sql: mocks.sql,
 }));
 
-vi.mock("@/credentials/encryption", () => ({
-  decrypt: mocks.decrypt,
+vi.mock("@/actions/external-actions", () => ({
+  requestExternalAction: mocks.requestExternalAction,
 }));
 
 import {
@@ -46,7 +46,7 @@ describe("buildPostCallSummary", () => {
     vi.restoreAllMocks();
     mocks.select.mockReset();
     mocks.sql.mockReset();
-    mocks.decrypt.mockReset();
+    mocks.requestExternalAction.mockReset();
   });
 
   it("formats a concise Discord message with duration + transcript", () => {
@@ -83,10 +83,15 @@ describe("buildPostCallSummary", () => {
   });
 
   it("claims the session row so concurrent postCallSummary calls only POST once", async () => {
-    const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    process.env.ENCRYPTION_KEY = "test-encryption-key";
-    mocks.decrypt.mockReturnValue(JSON.stringify({ botToken: "discord-bot" }));
+    mocks.requestExternalAction.mockResolvedValue({
+      requestId: "external-action-1",
+      status: "succeeded",
+      policyDecision: "allow",
+      policyReason: "test policy",
+      connectorSlug: "ea-discord",
+      operation: "send_channel",
+      result: { ok: true },
+    });
 
     let claimed = false;
     const updateResults: number[] = [];
@@ -141,13 +146,16 @@ describe("buildPostCallSummary", () => {
     ]);
 
     expect(updateResults).toEqual([1, 0]);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://discord.com/api/v10/channels/channel-1/messages",
+    expect(mocks.requestExternalAction).toHaveBeenCalledTimes(1);
+    expect(mocks.requestExternalAction).toHaveBeenCalledWith(
+      mocks.sql,
       expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bot discord-bot",
+        hiveId: "hive-1",
+        installId: "install-1",
+        operation: "send_channel",
+        actor: { type: "system", id: "voice-post-call-summary" },
+        args: expect.objectContaining({
+          content: expect.stringContaining("Call transcript"),
         }),
       }),
     );

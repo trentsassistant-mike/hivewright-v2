@@ -152,6 +152,48 @@ describe("buildOperationsMapModel relationship view", () => {
     expect(doneCluster?.tasks[0].liveBlocking).toBe(false);
   });
 
+  it("drops non-live decision rows so achieved-goal history does not masquerade as a blocker", () => {
+    const model = buildOperationsMapModel({
+      supervisors: [],
+      tasks: [],
+      criticalItems: [
+        {
+          id: "decision-done",
+          title: "Old owner follow-up",
+          sourceType: "decision",
+          status: "pending",
+          href: "/decisions/decision-done",
+          updatedAt: null,
+          goalId: "goal-done",
+          goalTitle: "Already-shipped goal",
+          goalStatus: "achieved",
+          taskId: null,
+          assignedTo: null,
+          liveBlocking: false,
+        },
+        {
+          id: "decision-live",
+          title: "Choose runtime path",
+          sourceType: "decision",
+          status: "pending",
+          href: "/decisions/decision-live",
+          updatedAt: null,
+          goalId: "goal-live",
+          goalTitle: "In-flight goal",
+          goalStatus: "active",
+          taskId: null,
+          assignedTo: null,
+          liveBlocking: true,
+        },
+      ],
+    });
+
+    expect(model.totalLiveCritical).toBe(1);
+    expect(model.totalHistoricalFailures).toBe(0);
+    expect(model.clusters.map((cluster) => cluster.goalId)).toEqual(["goal-live"]);
+    expect(model.clusters[0].tasks.map((task) => task.id)).toEqual(["decision-decision-live"]);
+  });
+
   it("sorts clusters by live critical count, then active work, then title", () => {
     const model = buildOperationsMapModel({
       supervisors: [],

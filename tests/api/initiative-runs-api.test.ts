@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createGetInitiativeRunsHandler } from "@/app/api/initiative-runs/route";
-import { createGetInitiativeRunDetailHandler } from "@/app/api/initiative-runs/[runId]/route";
+import { createGetInitiativeRunsHandler } from "@/app/api/initiative-runs/get-handler";
+import { createGetInitiativeRunDetailHandler } from "@/app/api/initiative-runs/[runId]/get-handler";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 const HIVE = "aaaaaaaa-0000-0000-0000-000000000111";

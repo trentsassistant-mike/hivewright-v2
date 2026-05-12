@@ -531,6 +531,37 @@ describe("Decisions API", () => {
     expect(task.failure_reason).toContain("Abandoned by owner");
   });
 
+  it("POST /api/decisions/[id]/respond — late approval after rejected release-scan proposal returns conflict and queues no patch task", async () => {
+    const releaseDecisionId = await createReleaseScanModelDecision();
+    const rejected = await respondToDecision(
+      new Request(`http://localhost/api/decisions/${releaseDecisionId}/respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ response: "rejected", comment: "Do not ship" }),
+      }),
+      { params: Promise.resolve({ id: releaseDecisionId }) },
+    );
+    const lateApproval = await respondToDecision(
+      new Request(`http://localhost/api/decisions/${releaseDecisionId}/respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ response: "approved", comment: "Changed my mind" }),
+      }),
+      { params: Promise.resolve({ id: releaseDecisionId }) },
+    );
+
+    expect(rejected.status).toBe(200);
+    expect(lateApproval.status).toBe(409);
+
+    const tasks = await sql<{ count: string }[]>`
+      SELECT COUNT(*)::text AS count
+      FROM tasks
+      WHERE created_by = 'decision-release-scan'
+        AND brief LIKE ${`%release-scan-decision:${releaseDecisionId}%`}
+    `;
+    expect(Number(tasks[0].count)).toBe(0);
+  });
+
   it("POST /api/decisions/[id]/respond — duplicate approval returns existing model-registry patch task", async () => {
     const releaseDecisionId = await createReleaseScanModelDecision();
 

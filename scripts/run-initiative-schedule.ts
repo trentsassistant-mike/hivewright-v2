@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveRuntimePath } from "../src/runtime/paths";
 import postgres, { type Sql } from "postgres";
-import { submitWorkIntake } from "../src/app/api/work/route";
+import { submitWorkIntake } from "../src/app/api/work/submit-work-intake";
 import { checkAndFireSchedules } from "../src/dispatcher/schedule-timer";
 import { withDisposableHive } from "./_lib/disposable-hive";
 

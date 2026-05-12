@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { createGetInitiativeRunDetailHandler } from "@/app/api/initiative-runs/[runId]/route";
-import { createGetInitiativeRunsHandler } from "@/app/api/initiative-runs/route";
+import { createGetInitiativeRunDetailHandler } from "@/app/api/initiative-runs/[runId]/get-handler";
+import { createGetInitiativeRunsHandler } from "@/app/api/initiative-runs/get-handler";
 import { POST as respondToDecision } from "@/app/api/decisions/[id]/respond/route";
 import { runLlmReleaseScan } from "@/llm-release-scan";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
@@ -216,6 +216,8 @@ describe("LLM release scan owner-gated flow", () => {
       { params: Promise.resolve({ id: decision.id }) },
     );
     expect(secondApproval.status).toBe(200);
+    const secondBody = await secondApproval.json();
+    expect(secondBody.data.queuedTaskId).toBe(body.data.queuedTaskId);
     expect(await countReleasePatchTasks()).toBe(1);
   });
 

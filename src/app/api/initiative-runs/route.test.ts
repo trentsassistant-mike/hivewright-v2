@@ -13,7 +13,7 @@ vi.mock("@/auth/users", () => ({
   canAccessHive: mocks.canAccessHive,
 }));
 
-import { createGetInitiativeRunsHandler } from "./route";
+import { createGetInitiativeRunsHandler } from "./get-handler";
 
 const HIVE_ID = "11111111-1111-1111-1111-111111111111";
 

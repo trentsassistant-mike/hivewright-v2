@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Sql } from "postgres";
 
 export interface NotificationPayload {
@@ -6,6 +7,7 @@ export interface NotificationPayload {
   message: string;
   priority: "urgent" | "normal" | "low";
   source?: string; // e.g. "dispatcher", "doctor", "decision"
+  idempotencyKey?: string;
 }
 
 export interface SendResult {
@@ -35,77 +37,6 @@ export function priorityMatches(filter: string, priority: string): boolean {
   return true;
 }
 
-const PRIORITY_COLORS: Record<string, number> = {
-  urgent: 0xff0000,  // red
-  normal: 0x3498db,  // blue
-  low: 0x95a5a6,     // grey
-};
-
-async function sendDiscord(
-  config: Record<string, string>,
-  payload: NotificationPayload,
-): Promise<void> {
-  const webhookUrl = config.webhook_url;
-  if (!webhookUrl) throw new Error("Discord webhook_url not configured");
-
-  const color = PRIORITY_COLORS[payload.priority] ?? 0x3498db;
-
-  const body = {
-    embeds: [
-      {
-        title: payload.title,
-        description: payload.message,
-        color,
-        footer: {
-          text: payload.source
-            ? `HiveWright | ${payload.source}`
-            : "HiveWright",
-        },
-        timestamp: new Date().toISOString(),
-      },
-    ],
-  };
-
-  const res = await fetch(webhookUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Discord webhook failed: ${res.status} ${res.statusText}`);
-  }
-}
-
-async function sendTelegram(
-  config: Record<string, string>,
-  payload: NotificationPayload,
-): Promise<void> {
-  const token = config.bot_token;
-  const chatId = config.chat_id;
-  if (!token || !chatId) throw new Error("Telegram bot_token or chat_id not configured");
-
-  const priorityEmoji =
-    payload.priority === "urgent" ? "\u{1F6A8}" : payload.priority === "normal" ? "\u{1F4CB}" : "\u{2139}\u{FE0F}";
-
-  const text = `${priorityEmoji} *${payload.title}*\n\n${payload.message}${payload.source ? `\n\n_Source: ${payload.source}_` : ""}`;
-
-  const url = `https://api.telegram.org/bot${token}/sendMessage`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: "Markdown",
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Telegram API failed: ${res.status} ${res.statusText}`);
-  }
-}
-
 function sendEmail(
   _config: Record<string, string>,
   payload: NotificationPayload,
@@ -122,6 +53,22 @@ function sendPush(
   console.log(
     `[notification:push] ${payload.priority} — ${payload.title}: ${payload.message}`,
   );
+}
+
+function notificationIdempotencyKey(payload: NotificationPayload, installId: string): string {
+  if (payload.idempotencyKey) return `notification:${payload.idempotencyKey}:${installId}`;
+  const digest = createHash("sha256")
+    .update(JSON.stringify({
+      hiveId: payload.hiveId,
+      installId,
+      source: payload.source ?? "notifications",
+      title: payload.title,
+      message: payload.message,
+      priority: payload.priority,
+    }))
+    .digest("hex")
+    .slice(0, 40);
+  return `notification:${digest}`;
 }
 
 /**
@@ -150,10 +97,11 @@ export async function sendNotification(
       AND connector_slug IN ('discord-webhook')
   `;
   if (connectorInstalls.length > 0) {
-    const { invokeConnector } = await import("../connectors/runtime");
+    const { requestExternalAction } = await import("../actions/external-actions");
     for (const install of connectorInstalls) {
       try {
-        const res = await invokeConnector(sql, {
+        const action = await requestExternalAction(sql, {
+          hiveId: payload.hiveId,
           installId: install.id,
           operation: "send_message",
           args: {
@@ -163,8 +111,10 @@ export async function sendNotification(
                 : `**${payload.title}**\n\n${payload.message}`,
           },
           actor: payload.source ?? "notifications",
+          idempotencyKey: notificationIdempotencyKey(payload, install.id),
         });
-        if (res.success) result.sent++;
+        if (action.status === "succeeded") result.sent++;
+        else if (action.status === "awaiting_approval") result.skipped++;
         else result.errors++;
       } catch {
         result.errors++;
@@ -191,13 +141,10 @@ export async function sendNotification(
     try {
       switch (pref.channel) {
         case "discord":
-          await sendDiscord(pref.config, payload);
-          result.sent++;
-          break;
         case "telegram":
-          await sendTelegram(pref.config, payload);
-          result.sent++;
-          break;
+          throw new Error(
+            `${pref.channel} notification_preferences are disabled; install a governed connector instead`,
+          );
         case "email":
           sendEmail(pref.config, payload);
           result.sent++;

@@ -131,11 +131,33 @@ function safeFileLabel(filePath: string | null, fallback: string): string {
   return parts.at(-1) || fallback;
 }
 
+function runDateKey(value: DateLike): string | null {
+  const output = dateOut(value);
+  return output ? output.slice(0, 10) : null;
+}
+
+function buildDailyCounts(tasks: AgentObservabilityTaskRow[]) {
+  const counts = tasks.reduce<Record<string, number>>((acc, task) => {
+    const day = runDateKey(task.created_at);
+    if (!day) return acc;
+    acc[day] = (acc[day] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return Object.entries(counts)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, count]) => ({ date, count }));
+}
+
 export function mapAgentObservabilityRows(rows: AgentObservabilityRows) {
   const statusCounts = rows.recentTasks.reduce<Record<string, number>>((counts, task) => {
     counts[task.status] = (counts[task.status] ?? 0) + 1;
     return counts;
   }, {});
+  const completedRuns = rows.recentTasks.filter((task) => task.status === "completed").length;
+  const failedRuns = rows.recentTasks.filter((task) => (
+    task.status === "failed" || task.status === "cancelled"
+  )).length;
 
   const toolsConfig = parseToolsConfig(rows.role.tools_config);
   const tools = toolsConfig?.mcps === undefined
@@ -192,6 +214,12 @@ export function mapAgentObservabilityRows(rows: AgentObservabilityRows) {
       emptyMessage: rows.recentTasks.length === 0
         ? "No agent-level run history has been recorded for this role."
         : null,
+    },
+    usageSummary: {
+      totalRuns: rows.recentTasks.length,
+      completedRuns,
+      failedRuns,
+      recentDailyCounts: buildDailyCounts(rows.recentTasks),
     },
     scheduleState: scheduleItems.length === 0
       ? {

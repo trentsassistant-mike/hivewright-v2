@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   requireApiUser: vi.fn(),
   canMutateHive: vi.fn(),
   getConnectorDefinition: vi.fn(),
-  invokeConnector: vi.fn(),
+  requestExternalAction: vi.fn(),
 }));
 
 vi.mock("../../../_lib/db", () => ({
@@ -24,8 +24,8 @@ vi.mock("@/connectors/registry", () => ({
   getConnectorDefinition: mocks.getConnectorDefinition,
 }));
 
-vi.mock("@/connectors/runtime", () => ({
-  invokeConnector: mocks.invokeConnector,
+vi.mock("@/actions/external-actions", () => ({
+  requestExternalAction: mocks.requestExternalAction,
 }));
 
 import { POST } from "./route";
@@ -51,7 +51,15 @@ describe("POST /api/connector-installs/[id]/test access control", () => {
       slug: "discord-webhook",
       operations: [{ slug: "send_message" }],
     });
-    mocks.invokeConnector.mockResolvedValue({ success: true, durationMs: 1 });
+    mocks.requestExternalAction.mockResolvedValue({
+      requestId: "request-1",
+      status: "succeeded",
+      policyDecision: "allow",
+      policyReason: "test policy",
+      connectorSlug: "discord-webhook",
+      operation: "send_message",
+      result: { success: true, durationMs: 1 },
+    });
   });
 
   it("rejects unauthenticated callers before resolving the install", async () => {
@@ -63,7 +71,7 @@ describe("POST /api/connector-installs/[id]/test access control", () => {
 
     expect(res.status).toBe(401);
     expect(mocks.sql).not.toHaveBeenCalled();
-    expect(mocks.invokeConnector).not.toHaveBeenCalled();
+    expect(mocks.requestExternalAction).not.toHaveBeenCalled();
   });
 
   it("rejects authenticated non-members before testing guessed install IDs", async () => {
@@ -78,7 +86,7 @@ describe("POST /api/connector-installs/[id]/test access control", () => {
     expect(res.status).toBe(403);
     expect(body.error).toBe("Forbidden: caller cannot mutate this hive");
     expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-a");
-    expect(mocks.invokeConnector).not.toHaveBeenCalled();
+    expect(mocks.requestExternalAction).not.toHaveBeenCalled();
   });
 
   it("allows hive members to reach the connector test invocation", async () => {
@@ -91,9 +99,18 @@ describe("POST /api/connector-installs/[id]/test access control", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.data).toEqual({ success: true, durationMs: 1 });
+    expect(body.data).toEqual({
+      requestId: "request-1",
+      status: "succeeded",
+      policyDecision: "allow",
+      policyReason: "test policy",
+      connectorSlug: "discord-webhook",
+      operation: "send_message",
+      result: { success: true, durationMs: 1 },
+    });
     expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "member-1", "hive-a");
-    expect(mocks.invokeConnector).toHaveBeenCalledWith(mocks.sql, {
+    expect(mocks.requestExternalAction).toHaveBeenCalledWith(mocks.sql, {
+      hiveId: "hive-a",
       installId: "install-1",
       operation: "send_message",
       args: { content: "ping" },

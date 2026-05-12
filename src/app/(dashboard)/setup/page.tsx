@@ -27,6 +27,11 @@ const setupLinks = [
     description: "Hive-scoped integrations and connector credentials.",
   },
   {
+    href: "/setup/action-policies",
+    title: "Action Policies",
+    description: "Hive-scoped allow, approval, and block policies for connector actions.",
+  },
+  {
     href: "/setup/health",
     title: "Setup Health",
     description: "Readiness checks across hives, runtime, models, memory, and connectors.",

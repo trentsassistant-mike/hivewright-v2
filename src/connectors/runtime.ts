@@ -4,6 +4,7 @@ import {
   recordAgentAuditEventBestEffort,
   type AgentAuditContext,
 } from "@/audit/agent-events";
+import { sanitizeAuditString } from "@/actions/redaction";
 import { decrypt } from "../credentials/encryption";
 import { HttpWebhookBlockedError } from "./http-webhook-safety";
 import { getConnectorDefinition } from "./registry";
@@ -320,13 +321,13 @@ async function recordHttpWebhookPostAudit(
     eventType: AGENT_AUDIT_EVENTS.httpWebhookPost,
     hiveId: install.hive_id as string,
     targetType: "url",
-    targetId: targetUrl ?? null,
+    targetId: targetUrl ? sanitizeAuditString(targetUrl) : null,
     outcome,
     metadata: {
       connectorSlug: "http-webhook",
       installId: install.id,
       operation: input.operation,
-      error: error instanceof Error ? error.message : error ? String(error) : undefined,
+      error: error instanceof Error ? sanitizeAuditString(error.message) : error ? sanitizeAuditString(String(error)) : undefined,
     },
   });
 }
@@ -349,14 +350,14 @@ async function logAndReturn(
           ${operation},
           ${partial.success ? "success" : "error"},
           ${durationMs},
-          ${partial.error ?? null},
+          ${partial.error ? sanitizeAuditString(partial.error) : null},
           ${actor}
         )
       `;
       if (!partial.success) {
         await sql`
           UPDATE connector_installs
-          SET last_error = ${partial.error ?? null}, updated_at = NOW()
+          SET last_error = ${partial.error ? sanitizeAuditString(partial.error) : null}, updated_at = NOW()
           WHERE id = ${installId}
         `;
       } else {

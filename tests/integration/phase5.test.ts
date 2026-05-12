@@ -34,7 +34,7 @@ beforeEach(async () => {
 
 describe("Phase 5 Integration: Interfaces", () => {
   it("hives API returns the test hive", async () => {
-    const res = await getHives();
+    const res = await getHives(new Request(`${BASE}/api/hives`));
     expect(res.status).toBe(200);
 
     const body = await res.json();
