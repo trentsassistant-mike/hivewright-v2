@@ -40,13 +40,19 @@ export function LiveUpdatesProvider({
         case "task_created":
         case "task_claimed":
         case "task_completed":
-        case "task_failed": {
+        case "task_failed":
+        case "task_cancelled": {
           queryClient.invalidateQueries({
             queryKey: queryKeys.dashboard.summary(hiveId),
           });
           queryClient.invalidateQueries({
             queryKey: queryKeys.tasks.active(hiveId),
           });
+          queryClient.invalidateQueries({ queryKey: ["brief", hiveId] });
+          queryClient.invalidateQueries({ queryKey: ["operations-map", "active-tasks", hiveId] });
+          queryClient.invalidateQueries({ queryKey: ["operations-map", "critical-items", hiveId] });
+          queryClient.invalidateQueries({ queryKey: ["operations-map", "active-supervisors", hiveId] });
+          queryClient.invalidateQueries({ queryKey: ["supervisor-reports", hiveId] });
           if (parsed.taskId) {
             queryClient.invalidateQueries({
               queryKey: queryKeys.tasks.detail(parsed.taskId),
@@ -62,6 +68,8 @@ export function LiveUpdatesProvider({
           queryClient.invalidateQueries({
             queryKey: queryKeys.dashboard.summary(hiveId),
           });
+          queryClient.invalidateQueries({ queryKey: ["brief", hiveId] });
+          queryClient.invalidateQueries({ queryKey: ["operations-map", "critical-items", hiveId] });
           break;
         }
         case "ea_message_created":

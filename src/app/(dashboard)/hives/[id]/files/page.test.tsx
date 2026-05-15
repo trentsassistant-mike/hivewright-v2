@@ -53,6 +53,7 @@ describe("HiveFilesPage", () => {
     expect(screen.getByRole("tab", { name: "Projects" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Work Products" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Attachments" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Reference Documents" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Generated Docs" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "EA Files" })).toBeTruthy();
 

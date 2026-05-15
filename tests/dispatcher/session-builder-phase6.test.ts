@@ -63,6 +63,27 @@ function makeTask(overrides: Partial<ClaimedTask> = {}): ClaimedTask {
   };
 }
 
+async function insertTask(overrides: Partial<ClaimedTask> = {}): Promise<ClaimedTask> {
+  const task = makeTask(overrides);
+  const [row] = await sql`
+    INSERT INTO tasks (
+      id, hive_id, assigned_to, created_by, title, brief, status, priority,
+      goal_id, parent_task_id, sprint_number, qa_required, acceptance_criteria,
+      retry_count, doctor_attempts, failure_reason, project_id
+    )
+    VALUES (
+      ${task.id}, ${task.hiveId}, ${task.assignedTo}, ${task.createdBy},
+      ${task.title}, ${task.brief}, ${task.status}, ${task.priority},
+      ${task.goalId}, ${task.parentTaskId}, ${task.sprintNumber},
+      ${task.qaRequired}, ${task.acceptanceCriteria}, ${task.retryCount},
+      ${task.doctorAttempts}, ${task.failureReason}, ${task.projectId}
+    )
+    RETURNING id
+  `;
+
+  return { ...task, id: row.id };
+}
+
 describe("session-builder Phase 6 — skills, credentials, standing instructions", () => {
   it("skills load by slug from skills-library", async () => {
     // Update dev-agent to include a known skill slug
@@ -131,6 +152,130 @@ describe("session-builder Phase 6 — skills, credentials, standing instructions
     expect(ctx.standingInstructions.some((si) => si.includes("Always write tests"))).toBe(true);
   });
 
+  it("audits explicit tool-grant decisions with granted and omitted tools", async () => {
+    await sql`
+      UPDATE role_templates
+      SET tools_config = ${sql.json({
+        mcps: ["github", "missing-mcp"],
+        allowedTools: ["Bash", "Read"],
+      })}
+      WHERE slug = ${roleSlug}
+    `;
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, description, status, session_id)
+      VALUES (${bizId}, 'Tool grant session goal', 'Exercise session identity audit', 'active', 'gs-tool-grant-session')
+      RETURNING id
+    `;
+    const task = await insertTask({
+      title: "Explicit tools",
+      brief: "Use configured role tools.",
+      goalId: goal.id,
+    });
+
+    const ctx = await buildSessionContext(sql, task);
+
+    expect(ctx.toolsConfig).toEqual({
+      mcps: ["github", "missing-mcp"],
+      allowedTools: ["Bash", "Read"],
+    });
+    const events = await sql<Array<{
+      event_type: string;
+      actor_type: string;
+      actor_id: string;
+      hive_id: string;
+      task_id: string;
+      agent_id: string;
+      target_type: string;
+      target_id: string;
+      outcome: string;
+      metadata: Record<string, unknown>;
+    }>>`
+      SELECT event_type, actor_type, actor_id, hive_id, task_id, agent_id,
+             target_type, target_id, outcome, metadata
+      FROM agent_audit_events
+      WHERE task_id = ${task.id}
+        AND event_type = 'tool.grant_decision'
+      ORDER BY created_at ASC
+    `;
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event_type: "tool.grant_decision",
+      actor_type: "system",
+      actor_id: "dispatcher",
+      hive_id: bizId,
+      task_id: task.id,
+      agent_id: `task:${task.id}`,
+      target_type: "tool_grant",
+      target_id: roleSlug,
+      outcome: "success",
+    });
+    expect(events[0].metadata).toMatchObject({
+      roleSlug,
+      assignee: roleSlug,
+      sessionId: "gs-tool-grant-session",
+      decisionSource: "role_tools_config",
+      requestedToolSet: {
+        mcps: ["github", "missing-mcp"],
+        allowedTools: ["Bash", "Read"],
+      },
+      grantedToolSet: {
+        mcps: ["github"],
+        allowedTools: ["Bash", "Read"],
+      },
+      deniedToolSet: {
+        mcps: ["missing-mcp"],
+        allowedTools: [],
+      },
+      decisionReasons: ["role has explicit tools_config"],
+    });
+    expect(JSON.stringify(events[0].metadata)).not.toContain(TEST_KEY);
+  });
+
+  it("audits auto-classified tool-grant decisions with granted and omitted MCPs", async () => {
+    await sql`
+      UPDATE role_templates
+      SET tools_config = NULL
+      WHERE slug = ${roleSlug}
+    `;
+    const task = await insertTask({
+      id: "00000000-0000-0000-0000-000000000098",
+      title: "Browser verification",
+      brief: "Open the dashboard in a browser and take a screenshot.",
+    });
+
+    const ctx = await buildSessionContext(sql, task);
+
+    expect(ctx.toolsConfig).toEqual({ mcps: ["playwright"] });
+    const events = await sql<Array<{ metadata: Record<string, unknown> }>>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE task_id = ${task.id}
+        AND event_type = 'tool.grant_decision'
+      ORDER BY created_at ASC
+    `;
+
+    expect(events).toHaveLength(1);
+    expect(events[0].metadata).toMatchObject({
+      roleSlug,
+      assignee: roleSlug,
+      decisionSource: "task_classifier",
+      requestedToolSet: {
+        mcps: ["context7", "github", "playwright", "sequential-thinking"],
+        allowedTools: [],
+      },
+      grantedToolSet: {
+        mcps: ["playwright"],
+        allowedTools: [],
+      },
+      deniedToolSet: {
+        mcps: ["context7", "github", "sequential-thinking"],
+        allowedTools: [],
+      },
+    });
+    expect((events[0].metadata.decisionReasons as string[])[0]).toContain("browser/UI verification");
+  });
+
   it("loads the hive-supervisor heartbeat skill into the Skills layer after role-library sync", async () => {
     const repoRoot = path.resolve(__dirname, "../..");
     await syncRoleLibrary(path.join(repoRoot, "role-library"), sql);
@@ -139,6 +284,15 @@ describe("session-builder Phase 6 — skills, credentials, standing instructions
       SELECT skills FROM role_templates WHERE slug = 'hive-supervisor'
     `;
     expect(role.skills).toContain("hive-supervisor-heartbeat");
+
+    // This test focuses on skill/standing-instruction assembly; keep model
+    // routing explicit so auto-routing policy availability does not obscure
+    // regressions in the Skills layer after role sync.
+    await sql`
+      UPDATE role_templates
+      SET adapter_type = 'claude-code', recommended_model = 'anthropic/claude-sonnet-4-6'
+      WHERE slug = 'hive-supervisor'
+    `;
 
     const [hive] = await sql`
       INSERT INTO hives (slug, name, type, workspace_path)

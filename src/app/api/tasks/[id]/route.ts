@@ -4,6 +4,8 @@ import { requireApiUser } from "../../_lib/auth";
 import { canAccessHive } from "@/auth/users";
 import { readLatestCodexEmptyOutputDiagnostic } from "@/runtime-diagnostics/codex-empty-output";
 import { readLatestTaskContextProvenance } from "@/provenance/task-context";
+import { serializeGoalBudgetStatus } from "@/budget/status";
+import { toPublicUsageSummary } from "@/usage/billable-usage";
 
 type TaskRow = {
   id: string;
@@ -29,10 +31,17 @@ type TaskRow = {
   cached_input_tokens_known: boolean;
   total_context_tokens: number | null;
   estimated_billable_cost_cents: number | null;
+  usage_details: unknown;
   tokens_input: number | null;
   tokens_output: number | null;
   cost_cents: number | null;
   model_used: string | null;
+  goal_budget_cents: number | null;
+  goal_spent_cents: number | null;
+  goal_budget_state: "ok" | "warning" | "paused" | "hard_stopped" | null;
+  goal_budget_warning_triggered_at: Date | null;
+  goal_budget_enforced_at: Date | null;
+  goal_budget_enforcement_reason: string | null;
   started_at: Date | null;
   completed_at: Date | null;
   created_at: Date;
@@ -52,6 +61,7 @@ type WorkProductRow = {
   prompt_tokens: number | null;
   output_tokens: number | null;
   cost_cents: number | null;
+  usage_details: unknown;
   metadata: Record<string, unknown> | null;
   created_at: Date;
 };
@@ -71,11 +81,12 @@ function mapWorkProductRow(r: WorkProductRow) {
       name: r.model_name,
       snapshot: r.model_snapshot,
     },
-    usage: {
-      promptTokens: r.prompt_tokens,
-      outputTokens: r.output_tokens,
+    usage: toPublicUsageSummary({
+      usageDetails: r.usage_details,
+      tokensInput: r.prompt_tokens,
+      tokensOutput: r.output_tokens,
       costCents: r.cost_cents,
-    },
+    }),
     metadata: r.metadata,
     downloadUrl: isImage ? `/api/work-products/${r.id}/download` : null,
     createdAt: r.created_at,
@@ -83,6 +94,17 @@ function mapWorkProductRow(r: WorkProductRow) {
 }
 
 function mapTaskRow(r: TaskRow, workProducts: WorkProductRow[] = []) {
+  const goalBudget = r.goal_budget_cents !== null || r.goal_spent_cents !== null
+    ? serializeGoalBudgetStatus({
+      budgetCents: r.goal_budget_cents,
+      spentCents: r.goal_spent_cents,
+      budgetState: r.goal_budget_state,
+      warningTriggeredAt: r.goal_budget_warning_triggered_at,
+      enforcedAt: r.goal_budget_enforced_at,
+      reason: r.goal_budget_enforcement_reason,
+      updatedAt: r.updated_at,
+    })
+    : null;
   return {
     id: r.id,
     hiveId: r.hive_id,
@@ -110,7 +132,14 @@ function mapTaskRow(r: TaskRow, workProducts: WorkProductRow[] = []) {
     tokensInput: r.tokens_input,
     tokensOutput: r.tokens_output,
     costCents: r.cost_cents,
+    usage: toPublicUsageSummary({
+      usageDetails: r.usage_details,
+      tokensInput: r.tokens_input,
+      tokensOutput: r.tokens_output,
+      costCents: r.cost_cents,
+    }),
     modelUsed: r.model_used,
+    goalBudget,
     startedAt: r.started_at,
     completedAt: r.completed_at,
     createdAt: r.created_at,
@@ -130,15 +159,22 @@ export async function GET(
     const { id } = await params;
 
     const rows = await sql`
-      SELECT id, hive_id, assigned_to, created_by, status, priority, title, brief,
-             parent_task_id, goal_id, project_id, sprint_number, qa_required, acceptance_criteria,
+      SELECT t.id, t.hive_id, t.assigned_to, t.created_by, t.status, t.priority, t.title, t.brief,
+             t.parent_task_id, t.goal_id, t.project_id, t.sprint_number, t.qa_required, t.acceptance_criteria,
              result_summary, retry_count, doctor_attempts, failure_reason,
              fresh_input_tokens, cached_input_tokens, cached_input_tokens_known,
              total_context_tokens, estimated_billable_cost_cents,
-             tokens_input, tokens_output, cost_cents, model_used,
-             started_at, completed_at, created_at, updated_at
-      FROM tasks
-      WHERE id = ${id}
+             usage_details, tokens_input, tokens_output, cost_cents, model_used,
+             started_at, completed_at, t.created_at, t.updated_at,
+             g.budget_cents AS goal_budget_cents,
+             g.spent_cents AS goal_spent_cents,
+             g.budget_state AS goal_budget_state,
+             g.budget_warning_triggered_at AS goal_budget_warning_triggered_at,
+             g.budget_enforced_at AS goal_budget_enforced_at,
+             g.budget_enforcement_reason AS goal_budget_enforcement_reason
+      FROM tasks t
+      LEFT JOIN goals g ON g.id = t.goal_id
+      WHERE t.id = ${id}
     `;
 
     if (rows.length === 0) {
@@ -159,6 +195,7 @@ export async function GET(
     const workProducts = await sql`
       SELECT id, content, summary, artifact_kind, mime_type, width, height,
              model_name, model_snapshot, prompt_tokens, output_tokens, cost_cents,
+             usage_details,
              metadata, created_at
       FROM work_products
       WHERE task_id = ${id}

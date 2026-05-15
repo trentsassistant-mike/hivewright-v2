@@ -88,9 +88,45 @@ describe("getHiveResumeReadiness", () => {
     expect(checker).toHaveBeenCalledTimes(2);
   });
 
-  it("blocks resume when work is already queued, decisions are pending, or configured models lack fresh healthy probes", async () => {
+  it("blocks resume when work is already queued, decisions are pending, or no model route has fresh healthy probe evidence", async () => {
     const db = createDb({
       counts: { runnable_tasks: 3, pending_decisions: 1, unresolvable_tasks: 8 },
+      models: [
+        { provider: "openai", adapter_type: "codex", model_id: "gpt-5.5" },
+        { provider: "moonshot", adapter_type: "openai-compatible", model_id: "kimi-2.6" },
+      ],
+    });
+    const checker: ModelReadinessChecker = vi.fn(async () => ({
+      canRun: false,
+      reason: "health_probe_missing" as const,
+      status: "unknown",
+      failureReason: "No probe row yet",
+    }));
+
+    const readiness = await getHiveResumeReadiness(db as never, {
+      hiveId: HIVE_ID,
+      checkModelHealth: checker,
+    });
+
+    expect(readiness.status).toBe("blocked");
+    expect(readiness.canResumeSafely).toBe(false);
+    expect(readiness.blockers.map((b) => b.code)).toEqual([
+      "runnable_tasks",
+      "pending_decisions",
+      "model_health_blocked",
+    ]);
+    expect(readiness.models.ready).toBe(0);
+    expect(readiness.models.blocked).toBe(2);
+    expect(readiness.models.blockedRoutes[1]).toMatchObject({
+      provider: "moonshot",
+      adapterType: "openai-compatible",
+      modelId: "kimi-2.6",
+      reason: "health_probe_missing",
+    });
+  });
+
+  it("does not block resume for stale fallback routes when at least one model is runnable", async () => {
+    const db = createDb({
       models: [
         { provider: "openai", adapter_type: "codex", model_id: "gpt-5.5" },
         { provider: "moonshot", adapter_type: "openai-compatible", model_id: "kimi-2.6" },
@@ -107,9 +143,9 @@ describe("getHiveResumeReadiness", () => {
       }
       return {
         canRun: false,
-        reason: "health_probe_missing" as const,
-        status: "unknown",
-        failureReason: "No probe row yet",
+        reason: "health_probe_stale" as const,
+        status: "healthy",
+        failureReason: null,
       };
     });
 
@@ -118,21 +154,11 @@ describe("getHiveResumeReadiness", () => {
       checkModelHealth: checker,
     });
 
-    expect(readiness.status).toBe("blocked");
-    expect(readiness.canResumeSafely).toBe(false);
-    expect(readiness.blockers.map((b) => b.code)).toEqual([
-      "runnable_tasks",
-      "pending_decisions",
-      "model_health_blocked",
-    ]);
+    expect(readiness.status).toBe("ready");
+    expect(readiness.canResumeSafely).toBe(true);
+    expect(readiness.blockers.map((b) => b.code)).not.toContain("model_health_blocked");
     expect(readiness.models.ready).toBe(1);
     expect(readiness.models.blocked).toBe(1);
-    expect(readiness.models.blockedRoutes[0]).toMatchObject({
-      provider: "moonshot",
-      adapterType: "openai-compatible",
-      modelId: "kimi-2.6",
-      reason: "health_probe_missing",
-    });
   });
 
   it("counts only active untriaged unresolvable tasks in resume readiness", async () => {

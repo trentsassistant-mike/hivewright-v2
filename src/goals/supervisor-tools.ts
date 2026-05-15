@@ -1,6 +1,10 @@
 import type { Sql } from "postgres";
 import type { DecisionOption } from "../db/schema/decisions";
 import type { SupervisorTool } from "./types";
+import {
+  AGENT_AUDIT_EVENTS,
+  recordAgentAuditEventBestEffort,
+} from "../audit/agent-events";
 import { emitDecisionEvent } from "../dispatcher/event-emitter";
 import { parkTaskIfRecoveryBudgetExceeded } from "../recovery/recovery-budget";
 import { upsertGoalPlan } from "./goal-documents";
@@ -521,6 +525,33 @@ export async function executeSupervisorTool(
         VALUES (${hiveId}, ${goalId}, ${sourceTaskId}, ${args.title}, ${args.context}, ${args.recommendation ?? null}, ${options === undefined ? null : sql.json(options as unknown as Parameters<typeof sql.json>[0])}, ${args.priority ?? "normal"}, ${status})
         RETURNING id
       `;
+      await recordAgentAuditEventBestEffort(sql, {
+        eventType: AGENT_AUDIT_EVENTS.decisionCreated,
+        actor: {
+          type: "agent",
+          id: "goal-supervisor",
+          label: "goal-supervisor",
+        },
+        hiveId,
+        goalId,
+        taskId: sourceTaskId,
+        targetType: "decision",
+        targetId: d.id as string,
+        outcome: "success",
+        metadata: {
+          source: "goals.supervisor_tools",
+          toolName: "create_decision",
+          decisionId: d.id,
+          goalId,
+          taskId: sourceTaskId,
+          status,
+          priority: args.priority ?? "normal",
+          autoApproved: Boolean(args.auto_approve),
+          optionCount: options?.length ?? null,
+          contextProvided: Boolean(args.context),
+          recommendationProvided: Boolean(args.recommendation),
+        },
+      });
       // Notification goes through the EA pipeline now — no direct
       // sendNotification here. We still emit the dashboard event so
       // the live decisions stream updates immediately.
@@ -564,6 +595,7 @@ export async function executeSupervisorTool(
         evidenceBundle: evidence.items,
         learningGate: learningGate.result,
         ...(completionStatus ? { completionStatus } : {}),
+        auditActionKind: "mark_goal_achieved",
       });
       return { success: true, message: `Goal status set to ${result.status}` };
     }

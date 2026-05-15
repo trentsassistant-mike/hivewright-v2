@@ -2,6 +2,7 @@ import { sql } from "../../_lib/db";
 import { jsonOk, jsonError } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
 import { canAccessHive, canMutateHive } from "@/auth/users";
+import { serializeGoalBudgetStatus } from "@/budget/status";
 
 type GoalRow = {
   id: string;
@@ -13,6 +14,10 @@ type GoalRow = {
   status: string;
   budget_cents: number | null;
   spent_cents: number;
+  budget_state: "ok" | "warning" | "paused" | "hard_stopped";
+  budget_warning_triggered_at: Date | null;
+  budget_enforced_at: Date | null;
+  budget_enforcement_reason: string | null;
   session_id: string | null;
   outcome_classification: string | null;
   outcome_classification_rationale: string | null;
@@ -46,6 +51,15 @@ function mapGoalRow(r: GoalRow) {
     status: r.status,
     budgetCents: r.budget_cents,
     spentCents: r.spent_cents,
+    budget: serializeGoalBudgetStatus({
+      budgetCents: r.budget_cents,
+      spentCents: r.spent_cents,
+      budgetState: r.budget_state,
+      warningTriggeredAt: r.budget_warning_triggered_at,
+      enforcedAt: r.budget_enforced_at,
+      reason: r.budget_enforcement_reason,
+      updatedAt: r.updated_at,
+    }),
     sessionId: r.session_id,
     outcomeClassification: r.outcome_classification,
     outcomeClassificationRationale: r.outcome_classification_rationale,
@@ -69,7 +83,8 @@ export async function GET(
 
     const goalRows = await sql`
       SELECT id, hive_id, parent_id, title, description, priority, status,
-             budget_cents, spent_cents, session_id,
+             budget_cents, spent_cents, budget_state, budget_warning_triggered_at,
+             budget_enforced_at, budget_enforcement_reason, session_id,
              outcome_classification, outcome_classification_rationale,
              outcome_process_references, outcome_classified_at, outcome_classified_by,
              created_at, updated_at
@@ -247,7 +262,8 @@ export async function PATCH(
         updated_at = NOW()
       WHERE id = ${id}
       RETURNING id, hive_id, parent_id, title, description, priority, status,
-                budget_cents, spent_cents, session_id,
+                budget_cents, spent_cents, budget_state, budget_warning_triggered_at,
+                budget_enforced_at, budget_enforcement_reason, session_id,
                 outcome_classification, outcome_classification_rationale,
                 outcome_process_references, outcome_classified_at, outcome_classified_by,
                 created_at, updated_at

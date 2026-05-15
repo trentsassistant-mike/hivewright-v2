@@ -288,15 +288,16 @@ function buildBlockers(
     return blockers;
   }
 
+  const readyModels = modelReadiness.filter((model) => model.category === "runnable").length;
   const blockedModels = modelReadiness.filter((model) => (
     model.category === "stale" || model.category === "unavailable"
   )).length;
-  if (blockedModels > 0) {
+  if (readyModels === 0 && blockedModels > 0) {
     blockers.push({
       code: "model_health_blocked",
-      label: "Models need fresh health evidence",
+      label: "No runnable model routes",
       count: blockedModels,
-      detail: "Every enabled model needs a fresh healthy probe before the dispatcher can spawn it.",
+      detail: "At least one enabled model route needs fresh healthy probe evidence before the dispatcher can spawn work.",
     });
   }
   return blockers;

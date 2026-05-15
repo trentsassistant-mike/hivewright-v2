@@ -23,6 +23,7 @@ import {
   databaseCreationPaused,
   isCreationPauseDbError,
 } from "@/operations/creation-pause";
+import { toPublicUsageSummary } from "@/usage/billable-usage";
 
 type TaskRow = {
   id: string;
@@ -48,6 +49,7 @@ type TaskRow = {
   cached_input_tokens_known: boolean;
   total_context_tokens: number | null;
   estimated_billable_cost_cents: number | null;
+  usage_details: unknown;
   tokens_input: number | null;
   tokens_output: number | null;
   cost_cents: number | null;
@@ -86,6 +88,12 @@ function mapTaskRow(r: TaskRow) {
     tokensInput: r.tokens_input,
     tokensOutput: r.tokens_output,
     costCents: r.cost_cents,
+    usage: toPublicUsageSummary({
+      usageDetails: r.usage_details,
+      tokensInput: r.tokens_input,
+      tokensOutput: r.tokens_output,
+      costCents: r.cost_cents,
+    }),
     modelUsed: r.model_used,
     startedAt: r.started_at,
     completedAt: r.completed_at,
@@ -185,7 +193,7 @@ export async function GET(request: Request) {
              result_summary, retry_count, doctor_attempts, failure_reason,
              fresh_input_tokens, cached_input_tokens, cached_input_tokens_known,
              total_context_tokens, estimated_billable_cost_cents,
-             tokens_input, tokens_output, cost_cents, model_used,
+             usage_details, tokens_input, tokens_output, cost_cents, model_used,
              started_at, completed_at, created_at, updated_at
       FROM tasks ${whereClause}
       ORDER BY created_at DESC
@@ -222,94 +230,108 @@ export async function POST(request: Request) {
     const body = await request.json();
     const {
       hiveId,
+      hive_id,
       assignedTo,
+      assigned_to,
       title,
       brief,
       priority,
       goalId,
+      goal_id,
       projectId,
       project_id,
       sprintNumber,
+      sprint_number,
       qaRequired,
+      qa_required,
       acceptanceCriteria,
+      acceptance_criteria,
       createdBy,
+      created_by,
       sourceTaskId,
       source_task_id,
       parentTaskId,
       parent_task_id,
     } = body;
+    const requestedHiveId = hiveId ?? hive_id;
+    const requestedAssignedTo = assignedTo ?? assigned_to;
+    const requestedGoalId = goalId ?? goal_id ?? null;
+    const requestedSprintNumber = sprintNumber ?? sprint_number ?? null;
+    const requestedQaRequired = qaRequired ?? qa_required ?? false;
+    const requestedAcceptanceCriteria = acceptanceCriteria ?? acceptance_criteria ?? null;
+    const requestedCreatedBy = createdBy ?? created_by ?? "system";
     const requestedProjectId = projectId ?? project_id ?? null;
     const requestedSourceTaskId = sourceTaskId ?? source_task_id ?? parentTaskId ?? parent_task_id ?? null;
 
-    if (!hiveId || !assignedTo || !title || !brief) {
+    if (!requestedHiveId || !requestedAssignedTo || !title || !brief) {
       return jsonError("Missing required fields: hiveId, assignedTo, title, brief", 400);
     }
 
     const supervisorProof = await requireGoalSupervisorTaskProof(request, authz.user, {
-      hiveId,
-      goalId,
-      createdBy,
+      hiveId: requestedHiveId,
+      goalId: requestedGoalId,
+      createdBy: requestedCreatedBy,
     });
     if (supervisorProof) return supervisorProof;
 
     const eaBypassResult = requireEaDirectCreateBypassReason(request, body);
     if (!eaBypassResult.ok) return eaBypassResult.response;
 
-    const taskScope = await enforceInternalTaskHiveScope(hiveId);
+    const taskScope = await enforceInternalTaskHiveScope(requestedHiveId);
     if (!taskScope.ok) return taskScope.response;
 
-    const creationPause = await assertHiveCreationAllowed(sql, hiveId);
+    const creationPause = await assertHiveCreationAllowed(sql, requestedHiveId);
     if (creationPause) return creationPausedResponse(creationPause);
 
-    let resolvedProjectId = await resolveDefaultProjectIdForHive(sql, hiveId, requestedProjectId);
-    if (!resolvedProjectId && goalId) {
+    let resolvedProjectId = await resolveDefaultProjectIdForHive(sql, requestedHiveId, requestedProjectId);
+    if (!resolvedProjectId && requestedGoalId) {
       const [goalProject] = await sql<{ project_id: string | null }[]>`
-        SELECT project_id FROM goals WHERE id = ${goalId} AND hive_id = ${hiveId} LIMIT 1
+        SELECT project_id FROM goals WHERE id = ${requestedGoalId} AND hive_id = ${requestedHiveId} LIMIT 1
       `;
       resolvedProjectId = goalProject?.project_id ?? null;
     }
 
-    const referenceCheck = await assertTaskReferencesBelongToHive(hiveId, {
-      goalId: goalId ?? null,
+    const referenceCheck = await assertTaskReferencesBelongToHive(requestedHiveId, {
+      goalId: requestedGoalId,
       projectId: resolvedProjectId,
     });
     if (referenceCheck) return referenceCheck;
 
-    if (createdBy === "goal-supervisor") {
+    if (requestedCreatedBy === "goal-supervisor") {
       const taskKind = typeof body.task_kind === "string" ? body.task_kind : "implementation";
-      const pipelineGate = await rejectDirectContentTaskWhenPipelineFits(sql, hiveId, {
-        assigned_to: assignedTo,
+      const pipelineGate = await rejectDirectContentTaskWhenPipelineFits(sql, requestedHiveId, {
+        assigned_to: requestedAssignedTo,
         title,
         brief,
-        acceptance_criteria: acceptanceCriteria,
+        acceptance_criteria: requestedAcceptanceCriteria,
       }, taskKind);
       if (pipelineGate) return jsonError(pipelineGate.message, 409);
     }
 
     // Validate delegation — if createdBy is a role (not "owner"), check delegates_to
     if (
-      createdBy &&
-      createdBy !== "owner" &&
-      createdBy !== "ea" &&
-      createdBy !== "system" &&
-      createdBy !== "goal-supervisor"
+      requestedCreatedBy &&
+      requestedCreatedBy !== "owner" &&
+      requestedCreatedBy !== "ea" &&
+      requestedCreatedBy !== "system" &&
+      requestedCreatedBy !== "goal-supervisor"
     ) {
       const [creatorRole] = await sql`
-        SELECT delegates_to FROM role_templates WHERE slug = ${createdBy}
+        SELECT delegates_to FROM role_templates WHERE slug = ${requestedCreatedBy}
       `;
       if (creatorRole) {
         const delegatesTo = typeof creatorRole.delegates_to === "string"
           ? JSON.parse(creatorRole.delegates_to || "[]")
           : (creatorRole.delegates_to || []);
-        if (Array.isArray(delegatesTo) && !delegatesTo.includes(assignedTo)) {
-          return jsonError(`Role '${createdBy}' cannot delegate tasks to '${assignedTo}'`, 403);
+        if (Array.isArray(delegatesTo) && !delegatesTo.includes(requestedAssignedTo)) {
+          return jsonError(`Role '${requestedCreatedBy}' cannot delegate tasks to '${requestedAssignedTo}'`, 403);
         }
       }
     }
 
     const sourceTaskResult = await resolveTaskSourceForCreate({
-      hiveId,
-      goalId: goalId ?? null,
+      hiveId: requestedHiveId,
+      goalId: requestedGoalId,
       sourceTaskId: requestedSourceTaskId,
       title,
     });
@@ -317,7 +339,7 @@ export async function POST(request: Request) {
     const resolvedSourceTaskId = sourceTaskResult.taskId;
 
     return await runIdempotentCreate(sql, {
-      hiveId,
+      hiveId: requestedHiveId,
       route: "/api/tasks",
       key: typeof idempotencyKey === "string" ? idempotencyKey : null,
       requestBody: body,
@@ -328,17 +350,17 @@ export async function POST(request: Request) {
             priority, goal_id, project_id, sprint_number, qa_required,
             acceptance_criteria, parent_task_id
           ) VALUES (
-            ${hiveId},
-            ${assignedTo},
-            ${createdBy ?? "system"},
+            ${requestedHiveId},
+            ${requestedAssignedTo},
+            ${requestedCreatedBy},
             ${title},
             ${brief},
             ${priority ?? 5},
-            ${goalId ?? null},
+            ${requestedGoalId},
             ${resolvedProjectId},
-            ${sprintNumber ?? null},
-            ${qaRequired ?? false},
-            ${acceptanceCriteria ?? null},
+            ${requestedSprintNumber},
+            ${requestedQaRequired},
+            ${requestedAcceptanceCriteria},
             ${resolvedSourceTaskId}
           )
           RETURNING id, hive_id, assigned_to, created_by, status, priority, title, brief,
@@ -351,12 +373,12 @@ export async function POST(request: Request) {
         `;
 
         const task = mapTaskRow(rows[0] as unknown as TaskRow);
-        await maybeRecordEaHiveSwitch(tx, request, hiveId, {
+        await maybeRecordEaHiveSwitch(tx, request, requestedHiveId, {
           type: "task",
           id: task.id,
         });
         await recordEaDirectCreateBypass(tx, {
-          hiveId,
+          hiveId: requestedHiveId,
           bypass: eaBypassResult.bypass,
           resource: {
             type: "task",

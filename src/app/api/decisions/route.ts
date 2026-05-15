@@ -4,6 +4,7 @@ import { enforceInternalTaskHiveScope, requireApiUser } from "../_lib/auth";
 import { canAccessHive } from "@/auth/users";
 import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
 import { AGENT_AUDIT_EVENTS } from "@/audit/agent-events";
+import { recordTaskLifecycleTransitionBestEffort } from "@/audit/task-lifecycle";
 import { recordDecisionAuditEvent } from "./_audit";
 import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
 import {
@@ -208,8 +209,12 @@ export async function POST(request: Request) {
       if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
     }
 
-    const [taskRow] = await sql<{ hiveId: string }[]>`
-      SELECT hive_id AS "hiveId" FROM tasks WHERE id = ${taskId}
+    const [taskRow] = await sql<{
+      hiveId: string;
+      goalId: string | null;
+      status: string;
+    }[]>`
+      SELECT hive_id AS "hiveId", goal_id AS "goalId", status FROM tasks WHERE id = ${taskId}
     `;
     if (!taskRow) return jsonError("Task not found", 404);
     if (taskRow.hiveId !== hiveId) {
@@ -244,9 +249,24 @@ export async function POST(request: Request) {
                 created_at, resolved_at
     `;
 
-    await sql`
+    const [updatedTask] = await sql<{ status: string }[]>`
       UPDATE tasks SET status = 'blocked', updated_at = NOW() WHERE id = ${taskId}
+      RETURNING status
     `;
+    await recordTaskLifecycleTransitionBestEffort(sql, {
+      taskId,
+      hiveId,
+      goalId: taskRow.goalId,
+      previousStatus: taskRow.status,
+      nextStatus: updatedTask?.status ?? "blocked",
+      actor: {
+        type: user.isSystemOwner ? "owner" : "agent",
+        id: user.id,
+        label: user.email ?? user.id,
+      },
+      source: "api.decisions.create",
+      reason: String(question),
+    });
 
     const decision = mapDecisionRow(row as unknown as DecisionRow);
     await recordDecisionAuditEvent({

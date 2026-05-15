@@ -237,6 +237,59 @@ describe("doctor loop — parse failure escalation", () => {
     expect(parent.status).toBe("unresolvable");
   });
 
+  it("preserves project context via task_id when escalating a malformed diagnosis on a project-scoped task", async () => {
+    // Regression: previously the malformed-diagnosis decision dropped the
+    // originating task linkage, so EA / dispatcher / dashboard could not
+    // resolve the project workspace from the resulting decision.
+    const [project] = await sql`
+      INSERT INTO projects (hive_id, slug, name, workspace_path)
+      VALUES (${bizId}, 'dl-malformed-project', 'DL Malformed Project', '/tmp/dl/malformed')
+      RETURNING id
+    `;
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, description, project_id)
+      VALUES (${bizId}, 'Goal for malformed', 'desc', ${project.id})
+      RETURNING id
+    `;
+    const [failed] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief,
+                         status, failure_reason, project_id, goal_id)
+      VALUES (
+        ${bizId}, 'dl-original-role', 'owner',
+        'dl-malformed-scoped', 'Do the thing',
+        'failed', 'something broke',
+        ${project.id}, ${goal.id}
+      )
+      RETURNING id
+    `;
+
+    const rawOutput = "I'm not going to bother with structured output.";
+    const parsed = parseDoctorDiagnosis(rawOutput);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      await escalateMalformedDiagnosis(sql, failed.id, parsed.reason, rawOutput);
+    }
+
+    const [decision] = await sql<{
+      id: string;
+      hive_id: string;
+      goal_id: string | null;
+      task_id: string | null;
+    }[]>`
+      SELECT id, hive_id, goal_id, task_id FROM decisions WHERE hive_id = ${bizId}
+    `;
+    expect(decision.task_id).toBe(failed.id);
+    expect(decision.goal_id).toBe(goal.id);
+    expect(decision.hive_id).toBe(bizId);
+
+    const [scoped] = await sql<{ project_id: string | null }[]>`
+      SELECT t.project_id
+      FROM decisions d JOIN tasks t ON t.id = d.task_id
+      WHERE d.id = ${decision.id}
+    `;
+    expect(scoped.project_id).toBe(project.id);
+  });
+
   it("valid JSON but unknown action → unresolvable + decision", async () => {
     const failed = await makeFailedTask();
     const rawOutput =

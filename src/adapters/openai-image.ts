@@ -3,6 +3,7 @@ import { calculateCostCents } from "./provider-config";
 import { resolveOpenAIAuth, sanitizeProviderText } from "./openai-auth";
 import { storeTaskImage } from "../work-products/image-storage";
 import { healthyProbeResult, probeResultFromBoundaryError, unhealthyProbeResult } from "./probe-classifier";
+import { buildUsageDetails, normalizeBillableUsage } from "../usage/billable-usage";
 
 export const GPT_IMAGE_2_MODEL = "gpt-image-2";
 export const GPT_IMAGE_2_SNAPSHOT = "gpt-image-2-2026-04-21";
@@ -221,6 +222,12 @@ export class OpenAIImageAdapter implements Adapter {
     const imageBase64 = payload.data?.find((image) => typeof image.b64_json === "string" && image.b64_json.length > 0)?.b64_json;
     if (!imageBase64) {
       const usage = normalizeImagesUsage(payload.usage);
+      const usageDetails = buildUsageDetails(normalizeBillableUsage({
+        totalInputTokens: usage.promptTokens,
+        freshInputTokens: usage.promptTokens,
+        tokensOutput: usage.outputTokens,
+        estimatedBillableCostCents: usage.costCents,
+      }));
       return {
         success: false,
         output: safeRaw,
@@ -230,10 +237,17 @@ export class OpenAIImageAdapter implements Adapter {
         tokensOutput: usage.outputTokens,
         costCents: usage.costCents,
         modelUsed: GPT_IMAGE_2_SNAPSHOT,
+        usageDetails,
       };
     }
 
     const usage = normalizeImagesUsage(payload.usage);
+    const usageDetails = buildUsageDetails(normalizeBillableUsage({
+      totalInputTokens: usage.promptTokens,
+      freshInputTokens: usage.promptTokens,
+      tokensOutput: usage.outputTokens,
+      estimatedBillableCostCents: usage.costCents,
+    }));
     const stored = await storeTaskImage({
       hiveWorkspacePath: ctx.hiveWorkspacePath,
       taskId: ctx.task.id,
@@ -257,6 +271,7 @@ export class OpenAIImageAdapter implements Adapter {
       tokensOutput: usage.outputTokens,
       costCents: usage.costCents,
       modelUsed: GPT_IMAGE_2_SNAPSHOT,
+      usageDetails,
       artifacts: [
         {
           kind: "image",
@@ -269,6 +284,7 @@ export class OpenAIImageAdapter implements Adapter {
           promptTokens: usage.promptTokens,
           outputTokens: usage.outputTokens,
           costCents: usage.costCents,
+          usageDetails,
           metadata: {
             modelName: GPT_IMAGE_2_MODEL,
             modelSnapshot: GPT_IMAGE_2_SNAPSHOT,

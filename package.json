@@ -35,6 +35,16 @@
     "hivewright:update": "tsx scripts/update-hivewright.ts",
     "notifier:verify": "tsx scripts/verify-outbound-notifier.ts",
     "notifier:live-smoke": "tsx scripts/send-outbound-notifier-live-smoke.ts",
+    "readiness:runtime-paths": "tsx scripts/readiness/runtime-path-proof.ts",
+    "readiness:connector-gap-map": "tsx scripts/readiness/connector-gap-map.ts",
+    "readiness:business-intake": "tsx scripts/readiness/print-business-intake-template.ts",
+    "readiness:controlled-scope": "tsx scripts/readiness/print-controlled-scope-worksheet.ts",
+    "readiness:intake-import-procedure": "tsx scripts/readiness/print-intake-import-procedure.ts",
+    "readiness:ai-budget-profile": "tsx scripts/readiness/print-ai-budget-profile.ts",
+    "readiness:emergency-stop": "tsx scripts/readiness/print-emergency-stop.ts",
+    "readiness:dispatcher-health": "tsx scripts/readiness/dispatcher-health-proof.ts",
+    "readiness:backup": "tsx scripts/readiness/backup-postgres.ts",
+    "readiness:restore-smoke": "tsx scripts/readiness/restore-smoke.ts",
     "build:dispatcher": "esbuild src/dispatcher/index.ts --bundle --platform=node --format=cjs --outfile=dispatcher-bundle.js --external:postgres --external:chokidar --external:discord.js --external:@discordjs/* --external:zlib-sync"
   },
   "dependencies": {
@@ -83,6 +93,7 @@
     "vitest": "^4.1.5"
   },
   "overrides": {
-    "postcss": "8.5.12"
+    "postcss": "8.5.12",
+    "fast-uri": "3.1.2"
   }
 }

@@ -17,6 +17,7 @@ export type ParsedCodexLine =
       kind: "result";
       threadId: string | null;
       tokensInput?: number;
+      freshInputTokens?: number;
       cachedInputTokens?: number;
       cachedInputTokensKnown?: boolean;
       tokensOutput?: number;
@@ -51,13 +52,17 @@ export function parseCodexLine(line: string): ParsedCodexLine {
   }
 
   if (parsed.type === "turn.completed") {
+    const freshInputTokens = parsed.usage?.input_tokens;
+    const cachedInputTokens = parsed.usage?.cached_input_tokens;
+    const totalInputTokens = (freshInputTokens ?? 0) + (cachedInputTokens ?? 0);
     return {
       kind: "result",
       threadId: null,
-      tokensInput: parsed.usage?.input_tokens,
+      tokensInput: totalInputTokens,
+      freshInputTokens,
       ...(parsed.usage?.cached_input_tokens !== undefined
         ? {
-            cachedInputTokens: parsed.usage.cached_input_tokens,
+            cachedInputTokens,
             cachedInputTokensKnown: true,
           }
         : {}),

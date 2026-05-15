@@ -292,6 +292,17 @@ export async function seedTestModelRoutingForHive(
       latency_ms = EXCLUDED.latency_ms,
       updated_at = NOW()
   `;
+
+  await sql`
+    DELETE FROM adapter_config
+    WHERE hive_id = ${hiveId}
+      AND adapter_type = 'model-routing'
+  `;
+
+  await sql`
+    INSERT INTO adapter_config (hive_id, adapter_type, config)
+    VALUES (${hiveId}, 'model-routing', ${sql.json({})})
+  `;
 }
 
 /**

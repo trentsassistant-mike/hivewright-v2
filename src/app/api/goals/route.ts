@@ -15,6 +15,7 @@ import {
   databaseCreationPaused,
   isCreationPauseDbError,
 } from "@/operations/creation-pause";
+import { serializeGoalBudgetStatus } from "@/budget/status";
 
 type GoalRow = {
   id: string;
@@ -26,6 +27,10 @@ type GoalRow = {
   status: string;
   budget_cents: number | null;
   spent_cents: number;
+  budget_state: "ok" | "warning" | "paused" | "hard_stopped";
+  budget_warning_triggered_at: Date | null;
+  budget_enforced_at: Date | null;
+  budget_enforcement_reason: string | null;
   session_id: string | null;
   outcome_classification: string | null;
   outcome_classification_rationale: string | null;
@@ -55,6 +60,15 @@ function mapGoalRow(r: GoalRow) {
     status: r.status,
     budgetCents: r.budget_cents,
     spentCents: r.spent_cents,
+    budget: serializeGoalBudgetStatus({
+      budgetCents: r.budget_cents,
+      spentCents: r.spent_cents,
+      budgetState: r.budget_state,
+      warningTriggeredAt: r.budget_warning_triggered_at,
+      enforcedAt: r.budget_enforced_at,
+      reason: r.budget_enforcement_reason,
+      updatedAt: r.updated_at,
+    }),
     sessionId: r.session_id,
     outcomeClassification: r.outcome_classification,
     outcomeClassificationRationale: r.outcome_classification_rationale,
@@ -122,7 +136,9 @@ export async function GET(request: Request) {
     const countQuery = `SELECT COUNT(*) as total FROM goals ${countWhereClause}`;
     const dataQuery = `
       SELECT g.id, g.hive_id, g.parent_id, g.title, g.description, g.status,
-             g.project_id, g.budget_cents, g.spent_cents, g.session_id, g.created_at, g.updated_at,
+             g.project_id, g.budget_cents, g.spent_cents, g.budget_state,
+             g.budget_warning_triggered_at, g.budget_enforced_at, g.budget_enforcement_reason,
+             g.session_id, g.created_at, g.updated_at,
              g.archived_at, g.outcome_classification, g.outcome_classification_rationale,
              g.outcome_process_references, g.outcome_classified_at, g.outcome_classified_by,
              COUNT(t.id) AS total_tasks,
@@ -220,7 +236,8 @@ export async function POST(request: Request) {
             ${resolvedProjectId}
           )
           RETURNING id, hive_id, project_id, parent_id, title, description, status,
-                    budget_cents, spent_cents, session_id,
+                    budget_cents, spent_cents, budget_state, budget_warning_triggered_at,
+                    budget_enforced_at, budget_enforcement_reason, session_id,
                     outcome_classification, outcome_classification_rationale,
                     outcome_process_references, outcome_classified_at, outcome_classified_by,
                     created_at, updated_at, archived_at

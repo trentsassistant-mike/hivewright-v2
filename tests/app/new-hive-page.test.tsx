@@ -429,6 +429,71 @@ describe("NewHiveWizard", () => {
     });
   });
 
+  it("does not redirect to setup health when the hive setup endpoint reports failure", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url.includes("/api/hives/setup")) {
+        return new Response(
+          JSON.stringify({ error: "A selected role could not be updated. Please review the runtime choices and try again." }),
+          { status: 500, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (url.includes("/api/roles") && init?.method === "POST") {
+        return jsonResponse({ data: { ok: true } });
+      }
+
+      if (url.includes("/api/roles")) {
+        return jsonResponse({
+          data: [
+            {
+              slug: "dev-agent",
+              name: "Dev Agent",
+              department: "eng",
+              adapterType: "claude-code",
+              recommendedModel: "anthropic/claude-sonnet-4-6",
+            },
+          ],
+        });
+      }
+
+      if (url.includes("/api/connectors")) {
+        return jsonResponse({ data: [] });
+      }
+
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof globalThis.fetch;
+
+    render(<NewHiveWizard />);
+
+    await fillRequiredHiveFields();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Set working preferences" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Set up your Discord EA" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Connect services" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Projects" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Review and launch" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Create Hive" }));
+
+    await waitFor(() => {
+      const alert = screen.getByRole("alert");
+      expect(alert.textContent).toContain("A selected role could not be updated");
+      expect(alert.textContent).toContain("Nothing has been marked complete");
+    });
+    expect(navigationMocks.push).not.toHaveBeenCalled();
+    expect(localStorage.getItem("selectedHiveId")).toBeNull();
+    const retryButton = screen.getByRole("button", { name: "Retry setup" });
+    expect(retryButton).toBeTruthy();
+    expect((retryButton as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("keeps an advanced custom hive address stable when the name changes", async () => {
     render(<NewHiveWizard />);
 

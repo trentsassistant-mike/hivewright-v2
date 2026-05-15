@@ -27,6 +27,8 @@ function makeTask(overrides: Partial<ClaimedTask>): ClaimedTask {
     retryCount: 0,
     doctorAttempts: 0,
     failureReason: null,
+    adapterOverride: "claude-code",
+    modelOverride: "claude-sonnet-4-5",
     projectId: null,
     ...overrides,
   };

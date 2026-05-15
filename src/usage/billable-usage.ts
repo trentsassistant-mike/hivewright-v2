@@ -12,6 +12,7 @@ export interface BillableUsageInput {
    */
   freshInputTokens?: number | null;
   cachedInputTokens?: number | null;
+  cacheCreationTokens?: number | null;
   cachedInputTokensKnown?: boolean | null;
   tokensOutput?: number | null;
   estimatedBillableCostCents?: number | null;
@@ -27,6 +28,7 @@ export interface BillableCostTokens {
 export interface NormalizedBillableUsage {
   freshInputTokens: number;
   cachedInputTokens: number;
+  cacheCreationTokens: number | null;
   cachedInputTokensKnown: boolean;
   tokensOutput: number;
   totalContextTokens: number;
@@ -38,6 +40,24 @@ export interface NormalizedBillableUsage {
   };
 }
 
+export interface UsageDetails {
+  totalInputTokens: number | null;
+  freshInputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  cachedInputTokensKnown: boolean;
+  estimatedBillableCostCents: number | null;
+}
+
+export interface PublicUsageSummary {
+  promptTokens: number | null;
+  outputTokens: number | null;
+  costCents: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+}
+
 function nonNegativeInt(value: number | null | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   return Math.max(0, Math.trunc(value));
@@ -47,6 +67,7 @@ export function normalizeBillableUsage(input: BillableUsageInput): NormalizedBil
   const explicitFreshInput = nonNegativeInt(input.freshInputTokens);
   const explicitTotalInput = nonNegativeInt(input.totalInputTokens);
   const explicitCachedInput = nonNegativeInt(input.cachedInputTokens);
+  const explicitCacheCreationInput = nonNegativeInt(input.cacheCreationTokens);
   const cachedInputTokensKnown =
     typeof input.cachedInputTokensKnown === "boolean"
       ? input.cachedInputTokensKnown
@@ -83,6 +104,7 @@ export function normalizeBillableUsage(input: BillableUsageInput): NormalizedBil
   return {
     freshInputTokens,
     cachedInputTokens,
+    cacheCreationTokens: explicitCacheCreationInput ?? null,
     cachedInputTokensKnown,
     tokensOutput,
     totalContextTokens,
@@ -107,4 +129,51 @@ export function calculateEstimatedBillableCostCents(
       (usage.cachedInputTokens / 1000) * cachedInputPer1k +
       (usage.tokensOutput / 1000) * pricing.outputPer1k,
   );
+}
+
+export function buildUsageDetails(usage: NormalizedBillableUsage): UsageDetails {
+  return {
+    totalInputTokens: usage.totalContextTokens,
+    freshInputTokens: usage.freshInputTokens,
+    outputTokens: usage.tokensOutput,
+    cacheReadTokens: usage.cachedInputTokensKnown ? usage.cachedInputTokens : null,
+    cacheCreationTokens: usage.cacheCreationTokens,
+    cachedInputTokensKnown: usage.cachedInputTokensKnown,
+    estimatedBillableCostCents: usage.estimatedBillableCostCents,
+  };
+}
+
+function nonNegativeNullableInt(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.trunc(value));
+}
+
+export function parseUsageDetails(value: unknown): UsageDetails | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  return {
+    totalInputTokens: nonNegativeNullableInt(record.totalInputTokens),
+    freshInputTokens: nonNegativeNullableInt(record.freshInputTokens),
+    outputTokens: nonNegativeNullableInt(record.outputTokens),
+    cacheReadTokens: nonNegativeNullableInt(record.cacheReadTokens),
+    cacheCreationTokens: nonNegativeNullableInt(record.cacheCreationTokens),
+    cachedInputTokensKnown: Boolean(record.cachedInputTokensKnown),
+    estimatedBillableCostCents: nonNegativeNullableInt(record.estimatedBillableCostCents),
+  };
+}
+
+export function toPublicUsageSummary(input: {
+  usageDetails?: unknown;
+  tokensInput?: number | null;
+  tokensOutput?: number | null;
+  costCents?: number | null;
+}): PublicUsageSummary {
+  const details = parseUsageDetails(input.usageDetails);
+  return {
+    promptTokens: details?.totalInputTokens ?? nonNegativeNullableInt(input.tokensInput),
+    outputTokens: details?.outputTokens ?? nonNegativeNullableInt(input.tokensOutput),
+    costCents: details?.estimatedBillableCostCents ?? nonNegativeNullableInt(input.costCents),
+    cacheReadTokens: details?.cacheReadTokens ?? null,
+    cacheCreationTokens: details?.cacheCreationTokens ?? null,
+  };
 }

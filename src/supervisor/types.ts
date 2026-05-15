@@ -8,7 +8,9 @@ export type FindingKind =
   | "goal_lifecycle_gap"
   | "aging_decision"
   | "recurring_failure"
-  | "orphan_output";
+  | "orphan_output"
+  | "unstarted_goal"
+  | "goal_appears_complete";
 
 export type FindingSeverity = "info" | "warn" | "critical";
 

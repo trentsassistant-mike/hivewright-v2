@@ -657,6 +657,7 @@ describe("buildSessionContext", () => {
     expect(events.map((event) => event.event_type)).toEqual([
       "credential.encryption_key_accessed",
       "credential.decrypted_for_agent_spawn",
+      "tool.grant_decision",
     ]);
     const serialized = JSON.stringify(events);
     expect(serialized).toContain(credentialKey);

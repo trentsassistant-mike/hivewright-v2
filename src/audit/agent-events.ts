@@ -11,6 +11,7 @@ export const AGENT_AUDIT_EVENTS = {
   decisionApproved: "decision.approved",
   decisionResolved: "decision.resolved",
   decisionRejected: "decision.rejected",
+  hiveMemoryWritten: "hive_memory.written",
   captureStarted: "capture_started",
   captureStopped: "capture_stopped",
   captureCancelled: "capture_cancelled",
@@ -24,6 +25,8 @@ export const AGENT_AUDIT_EVENTS = {
   httpWebhookPost: "http_webhook_post",
   workflowActivated: "workflow_activated",
   codexEmptyOutputFailure: "codex_empty_output_failure",
+  taskLifecycleTransition: "task.lifecycle_transition",
+  toolGrantDecision: "tool.grant_decision",
 } as const;
 
 export type AgentAuditEventType =

@@ -144,6 +144,15 @@ describe("buildSupervisorInitialPrompt", () => {
     expect(prompt).toContain("slug='content-publishing'");
   });
 
+  it("carries the HiveWright product copy guard into content goals", async () => {
+    const prompt = await buildSupervisorInitialPrompt(sql, goalId);
+    expect(prompt).toContain("HiveWright Product Copy Guard");
+    expect(prompt).toContain("Do NOT introduce");
+    expect(prompt).toContain("AI pilot");
+    expect(prompt).toContain("controlled autonomy");
+    expect(prompt).toContain("AI spend budget");
+  });
+
   it("states allowed fallback reasons when direct tasks are used for content goals", async () => {
     const prompt = await buildSupervisorInitialPrompt(sql, goalId);
     expect(prompt).toMatch(/single.shot/i);

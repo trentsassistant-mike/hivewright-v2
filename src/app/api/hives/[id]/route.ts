@@ -2,8 +2,9 @@ import { sql } from "../../_lib/db";
 import { jsonOk, jsonError } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
 import { canAccessHive } from "@/auth/users";
+import { normalizeAiBudgetSettings } from "@/budget/ai-budget";
 
-const ALLOWED_FIELDS = new Set(["name", "description", "mission"]);
+const ALLOWED_FIELDS = new Set(["name", "description", "mission", "softwareStack", "software_stack", "aiBudget"]);
 const REJECTED_FIELDS = new Set([
   "slug", "type", "id", "createdAt", "created_at",
   "eaSessionId", "ea_session_id", "workspacePath", "workspace_path",
@@ -18,7 +19,7 @@ export async function GET(
   const { id } = await params;
   if (!id) return jsonError("id is required", 400);
   const [row] = await sql`
-    SELECT id, slug, name, type, description, mission, workspace_path, is_system_fixture, created_at
+    SELECT id, slug, name, type, description, mission, software_stack, workspace_path, is_system_fixture, ai_budget_cap_cents, ai_budget_window, created_at
     FROM hives WHERE id = ${id}
   `;
   if (!row) return jsonError("hive not found", 404);
@@ -35,8 +36,13 @@ export async function GET(
     type: row.type,
     description: row.description,
     mission: row.mission,
+    softwareStack: row.software_stack,
     workspacePath: row.workspace_path,
     isSystemFixture: row.is_system_fixture,
+    aiBudget: {
+      capCents: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).capCents,
+      window: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).window,
+    },
     createdAt: row.created_at,
   });
 }
@@ -70,6 +76,25 @@ export async function PATCH(
     return jsonError("name cannot be empty", 400);
   }
 
+  let aiBudget: ReturnType<typeof normalizeAiBudgetSettings> | null = null;
+  if ("aiBudget" in body) {
+    const raw = body.aiBudget;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return jsonError("aiBudget must be an object", 400);
+    }
+    const record = raw as Record<string, unknown>;
+    if (typeof record.capCents !== "number" || !Number.isFinite(record.capCents)) {
+      return jsonError("aiBudget.capCents must be a number", 400);
+    }
+    if (record.capCents < 0) {
+      return jsonError("aiBudget.capCents must be non-negative", 400);
+    }
+    aiBudget = normalizeAiBudgetSettings({
+      capCents: record.capCents,
+      window: record.window,
+    });
+  }
+
   const [existing] = await sql`SELECT id FROM hives WHERE id = ${id}`;
   if (!existing) return jsonError("hive not found", 404);
 
@@ -91,9 +116,22 @@ export async function PATCH(
     const v = body.mission === null ? null : String(body.mission);
     await sql`UPDATE hives SET mission = ${v} WHERE id = ${id}`;
   }
+  if ("softwareStack" in body || "software_stack" in body) {
+    const raw = "softwareStack" in body ? body.softwareStack : body.software_stack;
+    const v = raw === null ? null : String(raw);
+    await sql`UPDATE hives SET software_stack = ${v} WHERE id = ${id}`;
+  }
+  if (aiBudget) {
+    await sql`
+      UPDATE hives
+      SET ai_budget_cap_cents = ${aiBudget.capCents},
+          ai_budget_window = ${aiBudget.window}
+      WHERE id = ${id}
+    `;
+  }
 
   const [row] = await sql`
-    SELECT id, slug, name, type, description, mission, workspace_path, is_system_fixture, created_at
+    SELECT id, slug, name, type, description, mission, software_stack, workspace_path, is_system_fixture, ai_budget_cap_cents, ai_budget_window, created_at
     FROM hives WHERE id = ${id}
   `;
 
@@ -104,8 +142,13 @@ export async function PATCH(
     type: row.type,
     description: row.description,
     mission: row.mission,
+    softwareStack: row.software_stack,
     workspacePath: row.workspace_path,
     isSystemFixture: row.is_system_fixture,
+    aiBudget: {
+      capCents: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).capCents,
+      window: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).window,
+    },
     createdAt: row.created_at,
   });
 }

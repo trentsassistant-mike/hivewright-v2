@@ -12,6 +12,9 @@ import {
 import { tmpdir } from "os";
 import path from "path";
 import { resolveRuntimePath } from "../src/runtime/paths";
+import { findMissingApiAuthInvariants } from "../src/security/api-auth-invariants";
+import { scanGeneratedPathPreflight } from "../src/security/generated-path-preflight";
+import { summarizeNpmAuditReport } from "../src/security/npm-audit-summary";
 
 type Severity = "pass" | "warn" | "high" | "critical";
 type CheckStatus = "pass" | "warn" | "fail" | "error";
@@ -35,6 +38,11 @@ type CheckResult = {
   name: string;
   status: CheckStatus;
   findings: Finding[];
+};
+
+type CliOptions = {
+  generatedPathOnly: boolean;
+  generatedPaths: string[];
 };
 
 const repoRoot = process.cwd();
@@ -62,6 +70,33 @@ const authInvariantTokens = [
   "requireApiUser",
   "requireSystemOwner",
 ];
+
+function parseCliOptions(argv: string[]): CliOptions {
+  const options: CliOptions = {
+    generatedPathOnly: false,
+    generatedPaths: [],
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--generated-path-only") {
+      options.generatedPathOnly = true;
+      continue;
+    }
+    if (arg === "--generated-path") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) {
+        throw new Error("--generated-path requires a file or directory path");
+      }
+      options.generatedPaths.push(next);
+      index += 1;
+    }
+  }
+
+  return options;
+}
+
+const cliOptions = parseCliOptions(process.argv.slice(2));
 
 function addFinding(finding: Finding) {
   findings.push(finding);
@@ -172,19 +207,17 @@ function runDependencyAudit() {
     return;
   }
 
-  const metadata = asRecord(parsed.metadata);
-  const vulnerabilityCounts = asRecord(metadata.vulnerabilities);
-  const high = Number(vulnerabilityCounts.high ?? 0);
-  const critical = Number(vulnerabilityCounts.critical ?? 0);
-  const moderate = Number(vulnerabilityCounts.moderate ?? 0);
-  const low = Number(vulnerabilityCounts.low ?? 0);
+  const auditSummary = summarizeNpmAuditReport(parsed);
+  const { critical, high, moderate, low } = auditSummary.counts;
 
   if (critical > 0 || high > 0) {
     checkFindings.push({
       check: "dependency-audit",
       severity: critical > 0 ? "critical" : "high",
       title: "npm audit found high or critical vulnerabilities",
-      detail: `npm audit summary: ${critical} critical, ${high} high, ${moderate} moderate, ${low} low.`,
+      detail: auditSummary.blockingDetail
+        ? `${auditSummary.countDetail} ${auditSummary.blockingDetail}`
+        : auditSummary.countDetail,
     });
   } else {
     checkFindings.push({
@@ -342,10 +375,6 @@ function runPermissionChecks() {
   );
 }
 
-function isPublicApiRoute(file: string) {
-  return publicApiPrefixes.some((prefix) => file.startsWith(prefix));
-}
-
 function runApiAuthInvariantChecks() {
   const checkFindings: Finding[] = [];
   const routeFiles = listGitFiles(["src/app/api/**/route.ts"]);
@@ -361,12 +390,12 @@ function runApiAuthInvariantChecks() {
     return;
   }
 
-  const missingAuth = routeFiles
-    .filter((file) => !isPublicApiRoute(file))
-    .filter((file) => {
-      const content = readFileSync(path.join(repoRoot, file), "utf8");
-      return !authInvariantTokens.some((token) => content.includes(token));
-    });
+  const missingAuth = findMissingApiAuthInvariants({
+    repoRoot,
+    routeFiles,
+    publicApiPrefixes,
+    authInvariantTokens,
+  });
 
   if (missingAuth.length === 0) {
     checkFindings.push({
@@ -389,6 +418,46 @@ function runApiAuthInvariantChecks() {
     });
   }
   addCheck("api-auth-invariants", "fail", checkFindings);
+}
+
+function runGeneratedPathPreflightCheck(generatedPaths: string[]) {
+  const result = scanGeneratedPathPreflight({
+    repoRoot,
+    candidatePaths: generatedPaths,
+  });
+
+  if (result.status === "not_enabled") {
+    addCheck("generated-path-preflight", "warn", [
+      {
+        check: "generated-path-preflight",
+        severity: "warn",
+        title: "Generated-path preflight not enabled",
+        detail: result.summary,
+      },
+    ]);
+    return;
+  }
+
+  if (result.status === "pass") {
+    addCheck("generated-path-preflight", "pass", [
+      {
+        check: "generated-path-preflight",
+        severity: "pass",
+        title: "Generated-path preflight passed",
+        detail: result.summary,
+      },
+    ]);
+    return;
+  }
+
+  addCheck("generated-path-preflight", "fail", result.findings.map((finding) => ({
+    check: "generated-path-preflight",
+    severity: finding.severity,
+    title: finding.title,
+    detail: finding.detail,
+    file: finding.file,
+    line: finding.line,
+  })));
 }
 
 function summarize() {
@@ -461,10 +530,13 @@ function writeReports() {
 }
 
 if (ensureRepoRoot()) {
-  runDependencyAudit();
-  runGitleaks();
-  runPermissionChecks();
-  runApiAuthInvariantChecks();
+  if (!cliOptions.generatedPathOnly) {
+    runDependencyAudit();
+    runGitleaks();
+    runPermissionChecks();
+    runApiAuthInvariantChecks();
+  }
+  runGeneratedPathPreflightCheck(cliOptions.generatedPaths);
 }
 
 const summary = writeReports();

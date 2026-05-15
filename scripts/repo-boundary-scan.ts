@@ -13,14 +13,19 @@ const repoRoot = process.cwd();
 const findings: Finding[] = [];
 
 const bannedTrackedPrefixes = [
+  ".audit-evidence/",
   "artifacts/",
   "docs/audit/",
   "docs/architecture/",
+  "docs/connectors/",
   "docs/conventions/",
   "docs/design/",
   "docs/engineering/",
   "docs/handoffs/",
+  "docs/marketing/",
+  "docs/operations/",
   "docs/ops/",
+  "docs/plans/",
   "docs/qa/",
   "docs/research/",
   "docs/security/",

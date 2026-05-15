@@ -52,7 +52,8 @@ describe("parseCodexLine", () => {
     const parsed = parseCodexLine(line);
     expect(parsed.kind).toBe("result");
     if (parsed.kind === "result") {
-      expect(parsed.tokensInput).toBe(100);
+      expect(parsed.tokensInput).toBe(150);
+      expect(parsed.freshInputTokens).toBe(100);
       expect(parsed.cachedInputTokens).toBe(50);
       expect(parsed.cachedInputTokensKnown).toBe(true);
       expect(parsed.tokensOutput).toBe(25);

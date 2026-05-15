@@ -1,6 +1,7 @@
 import { pgTable, uuid, varchar, text, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { hives } from "./hives";
 import { projects } from "./projects";
+import type { GoalBudgetState } from "@/budget/status";
 
 export const goals = pgTable("goals", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -13,6 +14,10 @@ export const goals = pgTable("goals", {
   status: varchar("status", { length: 50 }).default("active").notNull(),
   budgetCents: integer("budget_cents"),
   spentCents: integer("spent_cents").default(0).notNull(),
+  budgetState: varchar("budget_state", { length: 32 }).$type<GoalBudgetState>().default("ok").notNull(),
+  budgetWarningTriggeredAt: timestamp("budget_warning_triggered_at", { withTimezone: true }),
+  budgetEnforcedAt: timestamp("budget_enforced_at", { withTimezone: true }),
+  budgetEnforcementReason: text("budget_enforcement_reason"),
   sessionId: varchar("session_id", { length: 255 }),
   lastWokenSprint: integer("last_woken_sprint"),
   outcomeClassification: varchar("outcome_classification", { length: 32 }),

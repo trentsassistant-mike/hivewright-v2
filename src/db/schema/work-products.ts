@@ -2,6 +2,7 @@ import { integer, jsonb, pgTable, uuid, varchar, text, boolean, timestamp } from
 import { hives } from "./hives";
 import { tasks } from "./tasks";
 import { roleTemplates } from "./role-templates";
+import type { UsageDetails } from "@/usage/billable-usage";
 
 export const workProducts = pgTable("work_products", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -21,6 +22,7 @@ export const workProducts = pgTable("work_products", {
   promptTokens: integer("prompt_tokens"),
   outputTokens: integer("output_tokens"),
   costCents: integer("cost_cents"),
+  usageDetails: jsonb("usage_details").$type<UsageDetails>(),
   metadata: jsonb("metadata").$type<Record<string, unknown>>(),
   sensitivity: varchar("sensitivity", { length: 50 }).default("internal").notNull(),
   synthesized: boolean("synthesized").default(false).notNull(),

@@ -350,6 +350,55 @@ describe.sequential("applySupervisorActions — per-kind outcomes", () => {
     expect(rows[0].content).toMatch(/adapter timeouts/);
   });
 
+  it("records sanitized audit evidence for log_insight hive memory writes", async () => {
+    const sensitiveMemory = "audit-regression raw stall detail must not appear";
+    const outcomes = await applySupervisorActions(
+      sql,
+      HIVE_ID,
+      pack({
+        kind: "log_insight",
+        category: "operations",
+        content: sensitiveMemory,
+      }),
+    );
+    expect(outcomes[0].status).toBe("applied");
+
+    const [memory] = await sql<{ id: string }[]>`
+      SELECT id FROM hive_memory
+      WHERE hive_id = ${HIVE_ID}
+        AND content = ${sensitiveMemory}
+    `;
+    const [audit] = await sql<{
+      event_type: string;
+      actor_label: string | null;
+      hive_id: string | null;
+      target_type: string;
+      target_id: string | null;
+      metadata: Record<string, unknown>;
+    }[]>`
+      SELECT event_type, actor_label, hive_id, target_type, target_id, metadata
+      FROM agent_audit_events
+      WHERE target_type = 'hive_memory'
+        AND target_id = ${memory.id}
+    `;
+
+    expect(audit).toMatchObject({
+      event_type: "hive_memory.written",
+      actor_label: "hive-supervisor",
+      hive_id: HIVE_ID,
+      target_type: "hive_memory",
+      target_id: memory.id,
+    });
+    expect(audit.metadata).toMatchObject({
+      source: "supervisor.apply_actions",
+      actionKind: "log_insight",
+      memoryId: memory.id,
+      category: "operations",
+      sensitivity: "internal",
+    });
+    expect(JSON.stringify(audit.metadata)).not.toContain(sensitiveMemory);
+  });
+
   it("wake_goal updates the goal to force re-detection by lifecycle poll", async () => {
     const goalId = "55555555-5555-5555-5555-555555555555";
     await sql`
@@ -528,6 +577,71 @@ describe.sequential("applySupervisorActions — EA-first decision routing (gover
       SELECT status FROM decisions WHERE hive_id = ${HIVE_ID}
     `;
     expect(rows[0].status).toBe("ea_review");
+  });
+
+  it("records sanitized audit evidence for direct create_decision actions", async () => {
+    const sensitiveContext = "audit-regression raw decision context must not appear";
+    const sensitiveRecommendation = "audit-regression raw recommendation must not appear";
+    const outcomes = await applySupervisorActions(
+      sql,
+      HIVE_ID,
+      pack({
+        kind: "create_decision",
+        tier: 3,
+        title: "Audit covered supervisor decision",
+        context: sensitiveContext,
+        recommendation: sensitiveRecommendation,
+        options: [
+          { key: "pause", label: "Pause", response: "approved" },
+          { key: "continue", label: "Continue", response: "rejected" },
+        ],
+      }),
+    );
+    expect(outcomes[0].status).toBe("applied");
+
+    const [decision] = await sql<{ id: string; status: string; priority: string; kind: string }[]>`
+      SELECT id, status, priority, kind
+      FROM decisions
+      WHERE hive_id = ${HIVE_ID}
+        AND title = 'Audit covered supervisor decision'
+    `;
+    const [audit] = await sql<{
+      event_type: string;
+      actor_label: string | null;
+      hive_id: string | null;
+      target_type: string;
+      target_id: string | null;
+      metadata: Record<string, unknown>;
+    }[]>`
+      SELECT event_type, actor_label, hive_id, target_type, target_id, metadata
+      FROM agent_audit_events
+      WHERE target_type = 'decision'
+        AND target_id = ${decision.id}
+    `;
+
+    expect(decision.status).toBe("ea_review");
+    expect(audit).toMatchObject({
+      event_type: "decision.created",
+      actor_label: "hive-supervisor",
+      hive_id: HIVE_ID,
+      target_type: "decision",
+      target_id: decision.id,
+    });
+    expect(audit.metadata).toMatchObject({
+      source: "supervisor.apply_actions",
+      actionKind: "create_decision",
+      decisionId: decision.id,
+      tier: 3,
+      status: "ea_review",
+      priority: "urgent",
+      kind: "supervisor_flagged",
+      optionCount: 2,
+      contextProvided: true,
+      recommendationProvided: true,
+    });
+    const metadata = JSON.stringify(audit.metadata);
+    expect(metadata).not.toContain(sensitiveContext);
+    expect(metadata).not.toContain(sensitiveRecommendation);
   });
 
   it("create_decision preserves structured named options", async () => {

@@ -23,6 +23,92 @@ beforeEach(async () => {
 });
 
 describe("claimNextTask", () => {
+  it("does not claim pending work for goals paused by budget", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (
+        hive_id,
+        title,
+        status,
+        budget_cents,
+        spent_cents,
+        budget_state,
+        budget_enforced_at,
+        budget_enforcement_reason
+      )
+      VALUES (
+        ${bizId},
+        'paused-budget-goal',
+        'paused',
+        1000,
+        1000,
+        'paused',
+        NOW(),
+        'Paused by budget'
+      )
+      RETURNING *
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, goal_id)
+      VALUES (${bizId}, 'claimer-test-role', 'owner', 'claimer-budget-paused', 'Brief', ${goal.id})
+    `;
+
+    const task = await claimNextTask(sql, process.pid);
+    expect(task).toBeNull();
+  });
+
+  it("pauses and skips pending work when recorded goal spend is already at budget cap", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (
+        hive_id,
+        title,
+        status,
+        budget_cents,
+        spent_cents,
+        budget_state
+      )
+      VALUES (
+        ${bizId},
+        'stale-active-over-budget-goal',
+        'active',
+        1000,
+        1000,
+        'ok'
+      )
+      RETURNING *
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, goal_id)
+      VALUES (${bizId}, 'claimer-test-role', 'owner', 'claimer-budget-over-cap', 'Brief', ${goal.id})
+    `;
+
+    const task = await claimNextTask(sql, process.pid);
+    expect(task).toBeNull();
+
+    const [updatedGoal] = await sql`
+      SELECT status, budget_state, budget_enforced_at, budget_enforcement_reason
+      FROM goals
+      WHERE id = ${goal.id}
+    `;
+    expect(updatedGoal.status).toBe("paused");
+    expect(updatedGoal.budget_state).toBe("paused");
+    expect(updatedGoal.budget_enforced_at).not.toBeNull();
+    expect(updatedGoal.budget_enforcement_reason).toBe("Paused by budget");
+  });
+
+  it("does not claim pending work when the hive is creation-paused", async () => {
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief)
+      VALUES (${bizId}, 'claimer-test-role', 'owner', 'claimer-hive-paused', 'Brief')
+    `;
+    await sql`
+      INSERT INTO hive_runtime_locks (hive_id, creation_paused, reason, paused_by)
+      VALUES (${bizId}, true, 'Paused by AI spend budget breach', 'system:ai-budget')
+    `;
+
+    const task = await claimNextTask(sql, process.pid);
+    expect(task).toBeNull();
+  });
+
   it("claims a pending task atomically", async () => {
     // Insert with future retry_after so the live dispatcher skips it
     await sql`

@@ -743,6 +743,41 @@
       "when": 1778391600000,
       "tag": "0108_business_records",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1778659200000,
+      "tag": "0109_ai_budget_control_sprint2",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1778662800000,
+      "tag": "0110_budget_scope_controls",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1778666400000,
+      "tag": "0111_rename_ai_budget_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1778837199519,
+      "tag": "0112_hive_reference_context",
+      "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1778845722841,
+      "tag": "0113_hive_reference_documents",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,5 @@
 import type { Sql } from "postgres";
+import { recordTaskLifecycleTransitionBestEffort } from "@/audit/task-lifecycle";
 import { createDoctorTask } from "@/doctor";
 import {
   checkModelSpawnHealth,
@@ -74,6 +75,7 @@ interface UnresolvableTaskRow {
   parent_task_id: string | null;
   assigned_to: string;
   title: string;
+  status: string;
   failure_reason: string | null;
   adapter_override: string | null;
   model_override: string | null;
@@ -139,6 +141,7 @@ async function loadUntriagedRows(
       t.parent_task_id,
       t.assigned_to,
       t.title,
+      t.status,
       t.failure_reason,
       t.adapter_override,
       t.model_override,
@@ -326,7 +329,7 @@ async function markFixedByLaterWork(
   task: UnresolvableTaskRow,
   evidence: RouteSelectionEvidence,
 ): Promise<void> {
-  await sql`
+  const [updated] = await sql<{ status: string }[]>`
     UPDATE tasks
     SET status = 'completed',
         result_summary = COALESCE(
@@ -338,7 +341,17 @@ async function markFixedByLaterWork(
         route_selection_evidence = ${sql.json(evidence)},
         updated_at = NOW()
     WHERE id = ${task.id}
+    RETURNING status
   `;
+  await recordTaskLifecycleTransitionBestEffort(sql, {
+    taskId: task.id,
+    hiveId: task.hive_id,
+    goalId: task.goal_id,
+    previousStatus: task.status,
+    nextStatus: updated?.status ?? "completed",
+    source: "supervisor.unresolvableTriage.fixedByLaterWork",
+    reason: "Closed as fixed by later completed work.",
+  });
 }
 
 async function markDuplicateHistorical(
@@ -346,7 +359,7 @@ async function markDuplicateHistorical(
   task: UnresolvableTaskRow,
   evidence: RouteSelectionEvidence,
 ): Promise<void> {
-  await sql`
+  const [updated] = await sql<{ status: string }[]>`
     UPDATE tasks
     SET status = 'superseded',
         result_summary = COALESCE(
@@ -356,7 +369,17 @@ async function markDuplicateHistorical(
         route_selection_evidence = ${sql.json(evidence)},
         updated_at = NOW()
     WHERE id = ${task.id}
+    RETURNING status
   `;
+  await recordTaskLifecycleTransitionBestEffort(sql, {
+    taskId: task.id,
+    hiveId: task.hive_id,
+    goalId: task.goal_id,
+    previousStatus: task.status,
+    nextStatus: updated?.status ?? "superseded",
+    source: "supervisor.unresolvableTriage.duplicateHistorical",
+    reason: "Archived as duplicate historical recovery noise.",
+  });
 }
 
 async function retryTask(
@@ -365,7 +388,7 @@ async function retryTask(
   route: { adapterType: string; modelId: string },
   evidence: RouteSelectionEvidence,
 ): Promise<void> {
-  await sql`
+  const [updated] = await sql<{ status: string }[]>`
     UPDATE tasks
     SET status = 'pending',
         retry_count = 0,
@@ -377,7 +400,17 @@ async function retryTask(
         route_selection_evidence = ${sql.json(evidence)},
         updated_at = NOW()
     WHERE id = ${task.id}
+    RETURNING status
   `;
+  await recordTaskLifecycleTransitionBestEffort(sql, {
+    taskId: task.id,
+    hiveId: task.hive_id,
+    goalId: task.goal_id,
+    previousStatus: task.status,
+    nextStatus: updated?.status ?? "pending",
+    source: "supervisor.unresolvableTriage.retryTask",
+    reason: `Retried after model health recovered for ${route.adapterType}/${route.modelId}.`,
+  });
 }
 
 async function createEaReviewDecision(

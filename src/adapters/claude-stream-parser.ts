@@ -18,6 +18,7 @@ export type ParsedStreamLine =
       tokensInput?: number;
       freshInputTokens?: number;
       cachedInputTokens?: number;
+      cacheCreationTokens?: number;
       cachedInputTokensKnown?: boolean;
       tokensOutput?: number;
       modelUsed?: string;
@@ -66,8 +67,9 @@ export function parseStreamJsonLine(line: string): ParsedStreamLine {
       (parsed.usage?.input_tokens ?? 0) +
       (parsed.usage?.cache_creation_input_tokens ?? 0);
     const cachedInputTokens = parsed.usage?.cache_read_input_tokens;
+    const cacheCreationTokens = parsed.usage?.cache_creation_input_tokens;
     const hasCacheMetadata =
-      parsed.usage?.cache_creation_input_tokens !== undefined ||
+      cacheCreationTokens !== undefined ||
       cachedInputTokens !== undefined;
     return {
       kind: "result",
@@ -79,6 +81,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamLine {
         ? {
             freshInputTokens,
             cachedInputTokens: cachedInputTokens ?? 0,
+            cacheCreationTokens: cacheCreationTokens ?? 0,
             cachedInputTokensKnown: true,
           }
         : {}),

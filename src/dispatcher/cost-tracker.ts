@@ -1,20 +1,26 @@
 import type { Sql } from "postgres";
 import {
+  buildUsageDetails,
   calculateEstimatedBillableCostCents,
   normalizeBillableUsage,
+  type UsageDetails,
 } from "@/usage/billable-usage";
+import { enforceAiBudget } from "@/budget/ai-budget-policy";
+import { evaluateGoalBudgetPolicy, type GoalBudgetPolicyResult } from "./budget-policy";
 
 export interface TaskCostInput {
   tokensInput?: number;
   totalContextTokens?: number;
   freshInputTokens?: number;
   cachedInputTokens?: number;
+  cacheCreationTokens?: number | null;
   cachedInputTokensKnown?: boolean;
   tokensOutput: number;
   costCents?: number;
   estimatedBillableCostCents?: number;
   modelUsed: string;
   adapterUsed?: string | null;
+  usageDetails?: UsageDetails;
 }
 
 export async function recordTaskCost(
@@ -26,6 +32,7 @@ export async function recordTaskCost(
     totalInputTokens: cost.totalContextTokens ?? cost.tokensInput,
     freshInputTokens: cost.freshInputTokens,
     cachedInputTokens: cost.cachedInputTokens,
+    cacheCreationTokens: cost.cacheCreationTokens,
     cachedInputTokensKnown: cost.cachedInputTokensKnown,
     tokensOutput: cost.tokensOutput,
   });
@@ -33,6 +40,7 @@ export async function recordTaskCost(
     totalInputTokens: usageForCost.totalContextTokens,
     freshInputTokens: usageForCost.freshInputTokens,
     cachedInputTokens: usageForCost.cachedInputTokens,
+    cacheCreationTokens: usageForCost.cacheCreationTokens,
     cachedInputTokensKnown: usageForCost.cachedInputTokensKnown,
     tokensOutput: usageForCost.tokensOutput,
     estimatedBillableCostCents: cost.estimatedBillableCostCents ?? (
@@ -42,6 +50,10 @@ export async function recordTaskCost(
     ),
     legacyCostCents: cost.costCents,
   });
+  const usageDetails = {
+    ...buildUsageDetails(usage),
+    ...(cost.usageDetails ?? {}),
+  };
 
   await sql`
     UPDATE tasks
@@ -52,6 +64,7 @@ export async function recordTaskCost(
       tokens_output = ${usage.tokensOutput},
       total_context_tokens = ${usage.totalContextTokens},
       estimated_billable_cost_cents = ${usage.estimatedBillableCostCents},
+      usage_details = ${sql.json(usageDetails)},
       tokens_input = ${usage.legacy.tokensInput},
       cost_cents = ${usage.legacy.costCents},
       model_used = ${cost.modelUsed},
@@ -61,35 +74,18 @@ export async function recordTaskCost(
   `;
 }
 
-export interface BudgetCheckResult {
-  exceeded: boolean;
-  spentCents: number;
-  budgetCents: number | null;
-}
+export type BudgetCheckResult = GoalBudgetPolicyResult;
 
 export async function checkGoalBudget(
   sql: Sql,
   goalId: string,
 ): Promise<BudgetCheckResult> {
-  const [sum] = await sql`
-    SELECT COALESCE(SUM(cost_cents), 0)::int as total
-    FROM tasks WHERE goal_id = ${goalId}
-  `;
+  return evaluateGoalBudgetPolicy(sql, goalId);
+}
 
-  const spentCents = sum.total;
-
-  await sql`
-    UPDATE goals SET spent_cents = ${spentCents}, updated_at = NOW()
-    WHERE id = ${goalId}
-  `;
-
-  const [goal] = await sql`
-    SELECT budget_cents FROM goals WHERE id = ${goalId}
-  `;
-
-  return {
-    exceeded: goal?.budget_cents !== null && spentCents >= goal?.budget_cents,
-    spentCents,
-    budgetCents: goal?.budget_cents ?? null,
-  };
+export async function checkAiBudget(
+  sql: Sql,
+  hiveId: string,
+) {
+  return enforceAiBudget(sql, hiveId);
 }

@@ -130,4 +130,45 @@ describe("OwnerBrief recently completed", () => {
       .filter((l) => (l.getAttribute("href") ?? "").startsWith("/tasks/"));
     expect(taskLinks.length).toBe(0);
   });
+
+  it("renders the AI spend budget surface with warning state details", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/brief")) {
+        return new Response(
+          JSON.stringify(briefResponse({
+            aiBudget: {
+              currency: "USD",
+              capCents: 10_000,
+              consumedCents: 8_500,
+              remainingCents: 1_500,
+              progressPct: 85,
+              warningThresholdPct: 80,
+              breachedThresholdPct: 100,
+              state: "warning",
+              window: "monthly",
+              overBudgetCents: 0,
+              enforcement: {
+                mode: "creation_pause",
+                blocksNewWork: false,
+                reason: null,
+              },
+            },
+          })),
+          { status: 200 },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof globalThis.fetch;
+
+    renderBrief();
+
+    await waitFor(() => expect(screen.getByText("AI spend budget")).toBeTruthy());
+    expect(screen.queryByText(new RegExp(`Pilot ${"AI"} budget`))).toBeNull();
+    expect(screen.getByText("Warning")).toBeTruthy();
+    expect(screen.getByText("$100.00")).toBeTruthy();
+    expect(screen.getByText("$85.00")).toBeTruthy();
+    expect(screen.getByText("$15.00")).toBeTruthy();
+    expect(screen.getByText("85% used")).toBeTruthy();
+  });
 });

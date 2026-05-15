@@ -3,6 +3,7 @@ import { readLatestCodexEmptyOutputDiagnostic } from "@/runtime-diagnostics/code
 import { inheritTaskWorkspaceFromParent } from "@/dispatcher/worktree-manager";
 import { findExistingDoctorRecoveryTask } from "@/dispatcher/recovery-loop-guard";
 import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
+import { recordTaskLifecycleTransitionBestEffort } from "@/audit/task-lifecycle";
 import type { DoctorDiagnosis, ParseDoctorDiagnosisResult } from "./types";
 
 export { escalateMalformedDiagnosis } from "./escalate";
@@ -18,6 +19,32 @@ const VALID_ACTIONS: ReadonlySet<DoctorDiagnosis["action"]> = new Set([
   "reclassify",
   "convert-to-goal",
 ]);
+
+type TaskTransitionRow = {
+  hive_id: string;
+  goal_id: string | null;
+  previous_status: string;
+  next_status: string;
+};
+
+async function recordDoctorTransition(
+  sql: Sql,
+  taskId: string,
+  transition: TaskTransitionRow | undefined,
+  source: string,
+  reason?: string | null,
+): Promise<void> {
+  if (!transition) return;
+  await recordTaskLifecycleTransitionBestEffort(sql, {
+    taskId,
+    hiveId: transition.hive_id,
+    goalId: transition.goal_id,
+    previousStatus: transition.previous_status,
+    nextStatus: transition.next_status,
+    source,
+    reason,
+  });
+}
 
 export function parseDoctorDiagnosis(output: string): ParseDoctorDiagnosisResult {
   // Collect all fenced json blocks — the doctor may "think out loud" and
@@ -97,28 +124,64 @@ export async function applyDoctorDiagnosis(
 ): Promise<void> {
   switch (diagnosis.action) {
     case "rewrite_brief": {
-      await sql`
-        UPDATE tasks
-        SET status = 'pending', brief = ${diagnosis.newBrief!},
-            doctor_attempts = doctor_attempts + 1, retry_count = 0,
-            retry_after = NULL, updated_at = NOW()
-        WHERE id = ${taskId}
+      const [transition] = await sql<TaskTransitionRow[]>`
+        WITH previous AS (
+          SELECT id, hive_id, goal_id, status
+          FROM tasks
+          WHERE id = ${taskId}
+        ),
+        updated AS (
+          UPDATE tasks
+          SET status = 'pending', brief = ${diagnosis.newBrief!},
+              doctor_attempts = doctor_attempts + 1, retry_count = 0,
+              retry_after = NULL, updated_at = NOW()
+          WHERE id = ${taskId}
+          RETURNING id, hive_id, goal_id, status
+        )
+        SELECT updated.hive_id,
+               updated.goal_id,
+               previous.status AS previous_status,
+               updated.status AS next_status
+        FROM updated
+        JOIN previous ON previous.id = updated.id
       `;
+      await recordDoctorTransition(sql, taskId, transition, "doctor.applyDiagnosis.rewriteBrief", diagnosis.details);
       break;
     }
     case "reassign": {
-      await sql`
-        UPDATE tasks
-        SET status = 'pending', assigned_to = ${diagnosis.newRole!},
-            doctor_attempts = doctor_attempts + 1, retry_count = 0,
-            retry_after = NULL, updated_at = NOW()
-        WHERE id = ${taskId}
+      const [transition] = await sql<TaskTransitionRow[]>`
+        WITH previous AS (
+          SELECT id, hive_id, goal_id, status
+          FROM tasks
+          WHERE id = ${taskId}
+        ),
+        updated AS (
+          UPDATE tasks
+          SET status = 'pending', assigned_to = ${diagnosis.newRole!},
+              doctor_attempts = doctor_attempts + 1, retry_count = 0,
+              retry_after = NULL, updated_at = NOW()
+          WHERE id = ${taskId}
+          RETURNING id, hive_id, goal_id, status
+        )
+        SELECT updated.hive_id,
+               updated.goal_id,
+               previous.status AS previous_status,
+               updated.status AS next_status
+        FROM updated
+        JOIN previous ON previous.id = updated.id
       `;
+      await recordDoctorTransition(sql, taskId, transition, "doctor.applyDiagnosis.reassign", diagnosis.details);
       break;
     }
     case "split_task": {
-      const [original] = await sql`
-        SELECT hive_id, goal_id, sprint_number, project_id FROM tasks WHERE id = ${taskId}
+      const [original] = await sql<{
+        hive_id: string;
+        goal_id: string | null;
+        sprint_number: number | null;
+        project_id: string | null;
+        status: string;
+      }[]>`
+        SELECT hive_id, goal_id, sprint_number, project_id, status FROM tasks WHERE id = ${taskId}
       `;
 
       // Validate every subtask's role slug + the no-direct-qa rule BEFORE
@@ -157,9 +220,19 @@ export async function applyDoctorDiagnosis(
       });
       if (!budgetDecision.ok) break;
 
-      await sql`
+      const [updated] = await sql<{ status: string }[]>`
         UPDATE tasks SET status = 'cancelled', updated_at = NOW() WHERE id = ${taskId}
+        RETURNING status
       `;
+      await recordTaskLifecycleTransitionBestEffort(sql, {
+        taskId,
+        hiveId: original.hive_id,
+        goalId: original.goal_id,
+        previousStatus: original.status,
+        nextStatus: updated?.status ?? "cancelled",
+        source: "doctor.applyDiagnosis.splitTask",
+        reason: diagnosis.details,
+      });
       for (const sub of diagnosis.subTasks!) {
         const [subTask] = await sql`
           INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, parent_task_id, goal_id, sprint_number, project_id)
@@ -178,8 +251,13 @@ export async function applyDoctorDiagnosis(
       });
       if (!budgetDecision.ok) break;
 
-      const [original] = await sql`
-        SELECT hive_id, project_id FROM tasks WHERE id = ${taskId}
+      const [original] = await sql<{
+        hive_id: string;
+        goal_id: string | null;
+        project_id: string | null;
+        status: string;
+      }[]>`
+        SELECT hive_id, goal_id, project_id, status FROM tasks WHERE id = ${taskId}
       `;
       const [envFixTask] = await sql`
         INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, project_id)
@@ -190,11 +268,21 @@ export async function applyDoctorDiagnosis(
         RETURNING id
       `;
       await inheritTaskWorkspaceFromParent(sql, taskId, envFixTask.id as string);
-      await sql`
+      const [updated] = await sql<{ status: string }[]>`
         UPDATE tasks
         SET status = 'blocked', doctor_attempts = doctor_attempts + 1, updated_at = NOW()
         WHERE id = ${taskId}
+        RETURNING status
       `;
+      await recordTaskLifecycleTransitionBestEffort(sql, {
+        taskId,
+        hiveId: original.hive_id,
+        goalId: original.goal_id,
+        previousStatus: original.status,
+        nextStatus: updated?.status ?? "blocked",
+        source: "doctor.applyDiagnosis.fixEnvironment",
+        reason: diagnosis.details,
+      });
       break;
     }
     case "escalate": {
@@ -205,12 +293,22 @@ export async function applyDoctorDiagnosis(
       });
       if (!budgetDecision.ok) break;
 
-      const [task] = await sql`
-        SELECT hive_id, goal_id FROM tasks WHERE id = ${taskId}
+      const [task] = await sql<{ hive_id: string; goal_id: string | null; status: string }[]>`
+        SELECT hive_id, goal_id, status FROM tasks WHERE id = ${taskId}
       `;
-      await sql`
+      const [updated] = await sql<{ status: string }[]>`
         UPDATE tasks SET status = 'unresolvable', updated_at = NOW() WHERE id = ${taskId}
+        RETURNING status
       `;
+      await recordTaskLifecycleTransitionBestEffort(sql, {
+        taskId,
+        hiveId: task.hive_id,
+        goalId: task.goal_id,
+        previousStatus: task.status,
+        nextStatus: updated?.status ?? "unresolvable",
+        source: "doctor.applyDiagnosis.escalate",
+        reason: diagnosis.details,
+      });
       const decisionTitle = diagnosis.decisionTitle || "Task requires owner input";
       const decisionContext = diagnosis.decisionContext || diagnosis.details;
       // Route through EA-first: owner is a USER, not a developer; the EA
@@ -218,11 +316,16 @@ export async function applyDoctorDiagnosis(
       // plain-English context if it genuinely needs the owner's
       // judgement. The notification is fired by the EA pipeline after
       // (and only if) it escalates.
+      //
+      // task_id preserves the originating task so EA, dispatcher, adapters,
+      // and the dashboard can resolve the project workspace via the task
+      // row (decisions has no project_id of its own).
       await sql`
-        INSERT INTO decisions (hive_id, goal_id, title, context, priority, status)
+        INSERT INTO decisions (hive_id, goal_id, task_id, title, context, priority, status)
         VALUES (
           ${task.hive_id},
           ${task.goal_id},
+          ${taskId},
           ${decisionTitle},
           ${decisionContext},
           'urgent',

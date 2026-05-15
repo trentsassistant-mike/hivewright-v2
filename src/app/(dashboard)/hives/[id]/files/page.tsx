@@ -9,6 +9,7 @@ const CATEGORIES = [
   { id: "projects", label: "Projects" },
   { id: "work-products", label: "Work Products" },
   { id: "attachments", label: "Attachments" },
+  { id: "reference-documents", label: "Reference Documents" },
   { id: "generated-docs", label: "Generated Docs" },
   { id: "ea-files", label: "EA Files" },
 ] as const;

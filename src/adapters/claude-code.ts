@@ -256,6 +256,7 @@ export class ClaudeCodeAdapter implements Adapter {
             tokensInput: result.tokensInput,
             freshInputTokens: result.freshInputTokens,
             cachedInputTokens: result.cachedInputTokens,
+            cacheCreationTokens: result.cacheCreationTokens,
             cachedInputTokensKnown: result.cachedInputTokensKnown,
             tokensOutput: result.tokensOutput,
             modelUsed: result.modelUsed,

@@ -33,8 +33,12 @@ const goalRow = {
   description: null,
   priority: 5,
   status: "active",
-  budget_cents: null,
-  spent_cents: 0,
+  budget_cents: 1000,
+  spent_cents: 850,
+  budget_state: "warning",
+  budget_warning_triggered_at: new Date("2026-04-27T00:00:00Z"),
+  budget_enforced_at: null,
+  budget_enforcement_reason: null,
   session_id: null,
   created_at: new Date("2026-04-27T00:00:00Z"),
   updated_at: new Date("2026-04-27T00:00:00Z"),
@@ -88,6 +92,29 @@ describe("GET /api/goals/[id]", () => {
     expect(res.status).toBe(200);
     expect(body.data).toMatchObject({ id: "goal-1", hiveId: "hive-1" });
     expect(mockCanAccessHive).not.toHaveBeenCalled();
+  });
+
+  it("returns recorded budget status for the goal", async () => {
+    mockSql
+      .mockResolvedValueOnce([goalRow])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const res = await GET(new Request("http://localhost/api/goals/goal-1"), params);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.budget).toMatchObject({
+      capCents: 1000,
+      spentCents: 850,
+      remainingCents: 150,
+      percentUsed: 85,
+      warningThresholdPct: 80,
+      warning: true,
+      paused: false,
+      state: "warning",
+      reason: null,
+    });
   });
 });
 

@@ -1,7 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { useState } from "react";
+import type { FormEvent } from "react";
 
 type GoalHealth = "on_track" | "waiting_on_owner" | "stalled" | "at_risk" | "achieved";
 
@@ -77,6 +79,24 @@ interface BriefPayload {
       suppressionReasons: Array<{ reason: string; count: number }>;
     };
   };
+  aiBudget?: {
+    currency: "USD";
+    capCents: number;
+    consumedCents: number;
+    remainingCents: number;
+    progressPct: number;
+    warningThresholdPct: 80;
+    breachedThresholdPct: 100;
+    state: "normal" | "warning" | "breached";
+    overBudgetCents: number;
+    window: "daily" | "weekly" | "monthly" | "all_time";
+    scope: "hive";
+    enforcement: {
+      mode: "creation_pause";
+      blocksNewWork: boolean;
+      reason: string | null;
+    };
+  };
   operationLock?: {
     creationPause?: {
       paused: boolean;
@@ -143,6 +163,24 @@ function cents(c: number): string {
   return `$${(c / 100).toFixed(2)}`;
 }
 
+function budgetStateLabel(state: "normal" | "warning" | "breached"): string {
+  return state === "normal" ? "Normal" : state === "warning" ? "Warning" : "Breached";
+}
+
+function budgetWindowLabel(window: "daily" | "weekly" | "monthly" | "all_time" = "all_time"): string {
+  return window === "all_time" ? "All time" : window[0].toUpperCase() + window.slice(1);
+}
+
+function budgetStateClasses(state: "normal" | "warning" | "breached"): string {
+  if (state === "warning") {
+    return "bg-[rgba(229,154,27,0.16)] text-honey-300 ring-[rgba(229,154,27,0.32)]";
+  }
+  if (state === "breached") {
+    return "bg-[rgba(194,74,44,0.16)] text-[#F0A096] ring-[rgba(194,74,44,0.4)]";
+  }
+  return "bg-[rgba(126,155,126,0.16)] text-[#C7D8C2] ring-[rgba(126,155,126,0.36)]";
+}
+
 function relTime(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
   const m = Math.round(ms / 60_000);
@@ -187,6 +225,8 @@ const HEALTH_STYLES: Record<GoalHealth, { bg: string; text: string; ring: string
 };
 
 export function OwnerBrief({ hiveId }: { hiveId: string }) {
+  const queryClient = useQueryClient();
+  const [budgetSaveState, setBudgetSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const { data, isLoading, error } = useQuery({
     queryKey: ["brief", hiveId],
     queryFn: () => fetchBrief(hiveId),
@@ -200,6 +240,36 @@ export function OwnerBrief({ hiveId }: { hiveId: string }) {
   const urgent = data.flags.urgentDecisions > 0 || data.flags.unresolvableTasks > 0;
   const creationPaused = data.operationLock?.creationPause?.paused ?? false;
   const resumeReadiness = data.operationLock?.resumeReadiness;
+  const aiBudget = data.aiBudget;
+
+  async function saveAiBudget(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!aiBudget) return;
+    const form = new FormData(event.currentTarget);
+    const dollars = Number(form.get("aiBudgetDollars"));
+    const window = String(form.get("aiBudgetWindow") ?? aiBudget.window);
+    if (!Number.isFinite(dollars) || dollars < 0) {
+      setBudgetSaveState("error");
+      return;
+    }
+    setBudgetSaveState("saving");
+    const res = await fetch(`/api/hives/${hiveId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        aiBudget: {
+          capCents: Math.round(dollars * 100),
+          window,
+        },
+      }),
+    });
+    if (!res.ok) {
+      setBudgetSaveState("error");
+      return;
+    }
+    await queryClient.invalidateQueries({ queryKey: ["brief", hiveId] });
+    setBudgetSaveState("saved");
+  }
 
   return (
     <div className="space-y-6">
@@ -345,6 +415,101 @@ export function OwnerBrief({ hiveId }: { hiveId: string }) {
               </ul>
             </div>
           )}
+        </section>
+      )}
+
+      {aiBudget && (
+        <section className="rounded-[12px] border border-white/[0.06] bg-card p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-honey-300/80">
+                AI spend budget
+              </p>
+              <h2 className="mt-1 text-[20px] leading-[26px] font-semibold text-foreground">
+                {cents(aiBudget.consumedCents)} of {cents(aiBudget.capCents)}
+              </h2>
+              <p className="mt-1 text-[13px] leading-[18px] text-muted-foreground tabular-nums">
+                {aiBudget.progressPct}% used
+              </p>
+            </div>
+            <span
+              className={`shrink-0 rounded-[6px] px-2.5 py-1 text-[11px] font-semibold ring-1 ring-inset ${budgetStateClasses(aiBudget.state)}`}
+            >
+              {budgetStateLabel(aiBudget.state)}
+            </span>
+          </div>
+
+          <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/[0.05]">
+            <div
+              className={aiBudget.state === "breached"
+                ? "h-full bg-[#C24A2C]"
+                : aiBudget.state === "warning"
+                  ? "h-full bg-[var(--honey-500)]"
+                  : "h-full bg-[#7E9B7E]"
+              }
+              style={{ width: `${aiBudget.progressPct}%` }}
+            />
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-4">
+            <BudgetCell label="Cap" value={cents(aiBudget.capCents)} />
+            <BudgetCell label="Consumed" value={cents(aiBudget.consumedCents)} />
+            <BudgetCell label="Remaining" value={cents(aiBudget.remainingCents)} />
+            <BudgetCell label="Window" value={budgetWindowLabel(aiBudget.window)} />
+          </div>
+
+          <form onSubmit={saveAiBudget} className="mt-4 grid gap-3 rounded-[10px] border border-white/[0.06] bg-white/[0.025] p-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6F6A60]">
+              Budget cap (USD)
+              <input
+                name="aiBudgetDollars"
+                type="number"
+                min="0"
+                step="1"
+                defaultValue={Math.round(aiBudget.capCents / 100)}
+                className="mt-1 w-full rounded-[8px] border border-white/[0.08] bg-black/20 px-3 py-2 text-[13px] font-medium normal-case tracking-normal text-foreground outline-none focus:border-honey-500/50"
+              />
+            </label>
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6F6A60]">
+              Hive window
+              <select
+                name="aiBudgetWindow"
+                defaultValue={aiBudget.window}
+                className="mt-1 w-full rounded-[8px] border border-white/[0.08] bg-black/20 px-3 py-2 text-[13px] font-medium normal-case tracking-normal text-foreground outline-none focus:border-honey-500/50"
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="all_time">All time</option>
+              </select>
+            </label>
+            <button
+              type="submit"
+              disabled={budgetSaveState === "saving"}
+              className="rounded-[8px] border border-honey-700/40 bg-honey-700/15 px-3 py-2 text-[12px] font-semibold text-honey-300 hover:bg-honey-700/25 disabled:opacity-60"
+            >
+              {budgetSaveState === "saving" ? "Saving…" : "Save budget"}
+            </button>
+            {budgetSaveState === "saved" && (
+              <p className="text-[12px] text-[#C7D8C2] md:col-span-3">Budget saved.</p>
+            )}
+            {budgetSaveState === "error" && (
+              <p className="text-[12px] text-[#F0A096] md:col-span-3">Budget save failed.</p>
+            )}
+          </form>
+
+          <p className="mt-4 text-[12px] leading-[17px] text-muted-foreground">
+            {aiBudget.state === "breached"
+              ? aiBudget.enforcement.blocksNewWork
+                ? "Budget breached. New work is blocked for this workspace."
+                : "Budget breached. New-work blocking is not yet enforced."
+              : aiBudget.state === "warning"
+                ? `Warning threshold reached at ${aiBudget.warningThresholdPct}% of cap.`
+                : `Warning at ${aiBudget.warningThresholdPct}% of cap.`}
+            {aiBudget.overBudgetCents > 0
+              ? ` Over budget by ${cents(aiBudget.overBudgetCents)}.`
+              : ""}
+          </p>
         </section>
       )}
 
@@ -581,6 +746,17 @@ export function OwnerBrief({ hiveId }: { hiveId: string }) {
       <p className="text-right text-[11px] text-[#6F6A60] tabular-nums">
         Brief generated {relTime(data.generatedAt)}
       </p>
+    </div>
+  );
+}
+
+function BudgetCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[10px] border border-white/[0.06] bg-[#0F1114] p-3">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#6F6A60]">
+        {label}
+      </p>
+      <p className="mt-1 text-[16px] font-semibold text-foreground tabular-nums">{value}</p>
     </div>
   );
 }

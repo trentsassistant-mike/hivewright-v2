@@ -77,6 +77,12 @@ metadata:
 
 ## Landing Page Copy Template
 
+### HiveWright Product Copy Guard
+When writing HiveWright landing pages, product pages, docs, onboarding copy, or sales collateral:
+- Do **not** introduce "AI pilot", "Pilot AI", "pilot budget", "pilot mode", or "pilot program" unless the owner supplied that exact phrase as mandatory source copy.
+- Prefer: "controlled autonomy", "governed autonomous operations", "AI spend budget", "Hive budget", "owner-facing outcome engine", and "human-on-loop governance".
+- Before handoff, check changed customer-facing files for `/pilot/i`; remove the term unless it is explicitly owner-requested source language.
+
 ### Hero Section Structure
 - **Headline:** Clear value proposition in 10 words or fewer
 - **Subheadline:** Expand on the headline — who it's for and what they get

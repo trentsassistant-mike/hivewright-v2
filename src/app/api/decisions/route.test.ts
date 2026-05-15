@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => {
     canAccessHive: vi.fn(),
     maybeRecordEaHiveSwitch: vi.fn(),
     recordAgentAuditEventBestEffort: vi.fn(),
+    recordTaskLifecycleTransitionBestEffort: vi.fn(),
   };
 });
 
@@ -38,6 +39,10 @@ vi.mock("@/audit/agent-events", async (importOriginal) => {
   };
 });
 
+vi.mock("@/audit/task-lifecycle", () => ({
+  recordTaskLifecycleTransitionBestEffort: mocks.recordTaskLifecycleTransitionBestEffort,
+}));
+
 import { GET, POST } from "./route";
 
 describe("GET /api/decisions", () => {
@@ -49,6 +54,7 @@ describe("GET /api/decisions", () => {
     mocks.canAccessHive.mockResolvedValue(true);
     mocks.enforceInternalTaskHiveScope.mockResolvedValue({ ok: true });
     mocks.recordAgentAuditEventBestEffort.mockResolvedValue(undefined);
+    mocks.recordTaskLifecycleTransitionBestEffort.mockResolvedValue(undefined);
   });
 
   it("lists task quality feedback only when explicitly included", async () => {
@@ -143,13 +149,16 @@ describe("POST /api/decisions action-log audit", () => {
     const createdAt = new Date("2026-05-01T00:00:00Z");
     mocks.sql
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ hiveId: "hive-1" }])
+      .mockResolvedValueOnce([{ hiveId: "hive-1", goalId: "goal-1", status: "active" }])
       .mockResolvedValueOnce([{
         root_task_id: "task-1",
         doctor_task_count: 0,
         open_recovery_decision_count: 0,
+        open_recovery_decisions: [],
         replacement_task_count: 0,
       }])
+      // Recovery-budget replacement override lookup.
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{
         id: "decision-1",
         hive_id: "hive-1",
@@ -172,7 +181,7 @@ describe("POST /api/decisions action-log audit", () => {
         resolved_at: null,
         is_qa_fixture: false,
       }])
-      .mockResolvedValueOnce([]);
+      .mockResolvedValueOnce([{ status: "blocked" }]);
 
     const res = await POST(new Request("http://localhost/api/decisions", {
       method: "POST",
@@ -215,5 +224,17 @@ describe("POST /api/decisions action-log audit", () => {
     };
     expect(JSON.stringify(auditPayload.metadata)).not.toContain("Full raw decision prompt");
     expect(JSON.stringify(auditPayload.metadata)).not.toContain("Sensitive owner question");
+    expect(mocks.recordTaskLifecycleTransitionBestEffort).toHaveBeenCalledWith(
+      mocks.sql,
+      expect.objectContaining({
+        taskId: "task-1",
+        hiveId: "hive-1",
+        goalId: "goal-1",
+        previousStatus: "active",
+        nextStatus: "blocked",
+        source: "api.decisions.create",
+        reason: "Sensitive owner question",
+      }),
+    );
   });
 });

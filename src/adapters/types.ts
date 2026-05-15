@@ -1,4 +1,5 @@
 import type { ClaimedTask } from "../dispatcher/types";
+import type { UsageDetails } from "../usage/billable-usage";
 
 export interface RoleContext {
   roleMd: string | null;
@@ -165,12 +166,14 @@ export interface AdapterResult {
   tokensInput?: number;
   freshInputTokens?: number;
   cachedInputTokens?: number;
+  cacheCreationTokens?: number;
   cachedInputTokensKnown?: boolean;
   totalContextTokens?: number;
   estimatedBillableCostCents?: number;
   tokensOutput?: number;
   costCents?: number;
   modelUsed?: string;
+  usageDetails?: UsageDetails;
   artifacts?: AdapterArtifact[];
 }
 
@@ -253,6 +256,7 @@ export interface AdapterArtifact {
   promptTokens?: number;
   outputTokens?: number;
   costCents?: number;
+  usageDetails?: UsageDetails;
   metadata?: Record<string, unknown>;
 }
 

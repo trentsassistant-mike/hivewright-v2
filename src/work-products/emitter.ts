@@ -1,6 +1,7 @@
 import type { Sql } from "postgres";
 import { assertPathInTaskImageDirectory } from "./image-storage";
 import { classifySensitivity } from "./sensitivity";
+import type { UsageDetails } from "@/usage/billable-usage";
 
 export interface WorkProductInput {
   taskId: string;
@@ -12,6 +13,7 @@ export interface WorkProductInput {
   artifactKind?: "design-spec" | "image" | "text" | null;
   mimeType?: string | null;
   metadata?: Record<string, unknown> | null;
+  usageDetails?: UsageDetails | null;
 }
 
 export interface BinaryWorkProductInput extends WorkProductInput {
@@ -26,6 +28,7 @@ export interface BinaryWorkProductInput extends WorkProductInput {
   outputTokens?: number | null;
   costCents?: number | null;
   metadata?: Record<string, unknown> | null;
+  usageDetails?: UsageDetails | null;
 }
 
 export function shouldEmitWorkProduct(taskTitle: string): boolean {
@@ -38,11 +41,12 @@ export function shouldEmitWorkProduct(taskTitle: string): boolean {
 export async function emitWorkProduct(sql: Sql, input: WorkProductInput) {
   const sensitivity = classifySensitivity(input.content);
   const metadata = input.metadata ? sql.json(input.metadata as Parameters<typeof sql.json>[0]) : null;
+  const usageDetails = input.usageDetails ? sql.json(input.usageDetails as unknown as Parameters<typeof sql.json>[0]) : null;
 
   const [wp] = await sql`
     INSERT INTO work_products (
       task_id, hive_id, role_slug, department, content, summary,
-      artifact_kind, mime_type, metadata, sensitivity
+      artifact_kind, mime_type, metadata, sensitivity, usage_details
     )
     VALUES (
       ${input.taskId},
@@ -54,7 +58,8 @@ export async function emitWorkProduct(sql: Sql, input: WorkProductInput) {
       ${input.artifactKind ?? null},
       ${input.mimeType ?? null},
       ${metadata},
-      ${sensitivity}
+      ${sensitivity},
+      ${usageDetails}
     )
     RETURNING *
   `;
@@ -65,6 +70,7 @@ export async function emitWorkProduct(sql: Sql, input: WorkProductInput) {
 export async function emitBinaryWorkProduct(sql: Sql, input: BinaryWorkProductInput) {
   const sensitivity = classifySensitivity(input.content);
   const metadata = input.metadata ? sql.json(input.metadata as Parameters<typeof sql.json>[0]) : null;
+  const usageDetails = input.usageDetails ? sql.json(input.usageDetails as unknown as Parameters<typeof sql.json>[0]) : null;
   if (input.mimeType !== "image/png" && input.mimeType !== "image/jpeg") {
     throw new Error("Binary image work products must be PNG or JPEG artifacts");
   }
@@ -91,7 +97,7 @@ export async function emitBinaryWorkProduct(sql: Sql, input: BinaryWorkProductIn
     INSERT INTO work_products (
       task_id, hive_id, role_slug, department, content, summary,
       artifact_kind, file_path, mime_type, width, height, model_name, model_snapshot,
-      prompt_tokens, output_tokens, cost_cents, metadata, sensitivity
+      prompt_tokens, output_tokens, cost_cents, metadata, sensitivity, usage_details
     )
     VALUES (
       ${input.taskId},
@@ -111,7 +117,8 @@ export async function emitBinaryWorkProduct(sql: Sql, input: BinaryWorkProductIn
       ${input.outputTokens ?? null},
       ${input.costCents ?? null},
       ${metadata},
-      ${sensitivity}
+      ${sensitivity},
+      ${usageDetails}
     )
     RETURNING *
   `;

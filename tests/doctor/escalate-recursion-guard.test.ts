@@ -98,6 +98,60 @@ describe("escalateRecursionGuard", () => {
     expect(sendNotification).not.toHaveBeenCalled();
   });
 
+  it("preserves project context via task_id when the originating task is project-scoped", async () => {
+    // Regression: the recursion-guard path always wrote task_id, but we
+    // pin that contract here alongside the doctor escalate + malformed
+    // paths so a future "drop task_id" refactor would fail across all
+    // three escalation routes uniformly. Decisions has no project_id
+    // column, so downstream surfaces (EA, dispatcher, adapters,
+    // dashboard) resolve the project workspace through the task row.
+    const [project] = await sql`
+      INSERT INTO projects (hive_id, slug, name, workspace_path)
+      VALUES (${BIZ}, 'rg-project', 'RG Project', '/tmp/rg')
+      RETURNING id
+    `;
+    const [goal] = await sql<{ id: string }[]>`
+      INSERT INTO goals (hive_id, title, description, project_id)
+      VALUES (${BIZ}, 'rg goal', 'desc', ${project.id})
+      RETURNING id
+    `;
+    const [parent] = await sql<{ id: string }[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, status, priority,
+                         title, brief, project_id, goal_id)
+      VALUES (${BIZ}, 'dev', 'owner', 'failed', 5,
+              'rg-parent', 'rg-brief', ${project.id}, ${goal.id})
+      RETURNING id
+    `;
+    const [doctor] = await sql<{ id: string }[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, status, priority,
+                         title, brief, parent_task_id, project_id)
+      VALUES (${BIZ}, 'doctor', 'dispatcher', 'failed', 5,
+              'doctor: rg-parent', 'doctor brief', ${parent.id}, ${project.id})
+      RETURNING id
+    `;
+
+    await escalateRecursionGuard(sql, doctor.id, "boom");
+
+    const [decision] = await sql<{
+      id: string;
+      hive_id: string;
+      goal_id: string | null;
+      task_id: string | null;
+    }[]>`
+      SELECT id, hive_id, goal_id, task_id FROM decisions WHERE task_id = ${parent.id}
+    `;
+    expect(decision.task_id).toBe(parent.id);
+    expect(decision.goal_id).toBe(goal.id);
+    expect(decision.hive_id).toBe(BIZ);
+
+    const [scoped] = await sql<{ project_id: string | null }[]>`
+      SELECT t.project_id
+      FROM decisions d JOIN tasks t ON t.id = d.task_id
+      WHERE d.id = ${decision.id}
+    `;
+    expect(scoped.project_id).toBe(project.id);
+  });
+
   it("tags the decision kind='system_error' for infra failures (also via ea_review)", async () => {
     const { parentId, doctorId } = await insertParentAndDoctor();
     const { sendPushNotification, sendNotification } = await import("../../src/notifications/sender");

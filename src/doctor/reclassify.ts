@@ -1,4 +1,5 @@
 import type { Sql } from "postgres";
+import { recordTaskLifecycleTransitionBestEffort } from "@/audit/task-lifecycle";
 import { runClassifier } from "@/work-intake/runner";
 
 /**
@@ -12,9 +13,14 @@ export async function applyReclassify(
   failureContext: string,
 ): Promise<void> {
   const [task] = await sql<{
-    id: string; hive_id: string; assigned_to: string; brief: string;
+    id: string;
+    hive_id: string;
+    goal_id: string | null;
+    assigned_to: string;
+    brief: string;
+    status: string;
   }[]>`
-    SELECT id, hive_id, assigned_to, brief FROM tasks WHERE id = ${taskId}
+    SELECT id, hive_id, goal_id, assigned_to, brief, status FROM tasks WHERE id = ${taskId}
   `;
   if (!task) return;
 
@@ -43,13 +49,23 @@ export async function applyReclassify(
       SET superseded_by = ${newCls.id}
       WHERE task_id = ${taskId} AND id != ${newCls.id} AND superseded_by IS NULL
     `;
-    await sql`
+    const [updated] = await sql<{ status: string }[]>`
       UPDATE tasks
       SET status = 'pending', assigned_to = ${outcome.result.role},
           doctor_attempts = doctor_attempts + 1, retry_count = 0,
           retry_after = NULL, updated_at = NOW()
       WHERE id = ${taskId}
+      RETURNING status
     `;
+    await recordTaskLifecycleTransitionBestEffort(sql, {
+      taskId,
+      hiveId: task.hive_id,
+      goalId: task.goal_id,
+      previousStatus: task.status,
+      nextStatus: updated?.status ?? "pending",
+      source: "doctor.applyReclassify",
+      reason: failureContext,
+    });
     return;
   }
 
@@ -59,9 +75,15 @@ export async function applyReclassify(
 
 export async function applyConvertToGoal(sql: Sql, taskId: string): Promise<void> {
   const [task] = await sql<{
-    id: string; hive_id: string; project_id: string | null; title: string; brief: string;
+    id: string;
+    hive_id: string;
+    goal_id: string | null;
+    project_id: string | null;
+    title: string;
+    brief: string;
+    status: string;
   }[]>`
-    SELECT id, hive_id, project_id, title, brief FROM tasks WHERE id = ${taskId}
+    SELECT id, hive_id, goal_id, project_id, title, brief, status FROM tasks WHERE id = ${taskId}
   `;
   if (!task) return;
 
@@ -91,12 +113,22 @@ export async function applyConvertToGoal(sql: Sql, taskId: string): Promise<void
     WHERE task_id = ${taskId}
   `;
 
-  await sql`
+  const [updated] = await sql<{ status: string }[]>`
     UPDATE tasks
     SET status = 'cancelled',
         result_summary = ${`Converted to goal: ${goal.id}`},
         doctor_attempts = doctor_attempts + 1,
         updated_at = NOW()
     WHERE id = ${taskId}
+    RETURNING status
   `;
+  await recordTaskLifecycleTransitionBestEffort(sql, {
+    taskId,
+    hiveId: task.hive_id,
+    goalId: task.goal_id,
+    previousStatus: task.status,
+    nextStatus: updated?.status ?? "cancelled",
+    source: "doctor.applyConvertToGoal",
+    reason: `Converted to goal: ${goal.id}`,
+  });
 }

@@ -46,23 +46,26 @@ export async function escalateMalformedDiagnosis(
   const kind = "system_error";
 
   await sql.begin(async (tx) => {
-    await tx`
-      UPDATE tasks
-      SET status = 'unresolvable',
-          failure_reason = ${`Doctor diagnosis parse failure: ${reason}`},
-          updated_at = NOW()
-      WHERE id = ${parentTaskId}
-    `;
+    await markUnresolvable(
+      tx as unknown as Sql,
+      parentTaskId,
+      `Doctor diagnosis parse failure: ${reason}`,
+    );
     // Route through EA-first: even system_error decisions shouldn't
     // reach the owner directly. The EA can read the failure context,
     // attempt autonomous recovery (cancel orphan task, retry with a
     // different role, etc.), and only escalate with rewritten plain-
     // English context if it genuinely needs the owner's input.
+    //
+    // task_id pins the decision to the originating task so the EA,
+    // dispatcher, adapters, and dashboard can resolve the project
+    // workspace through the task row (decisions has no project_id).
     await tx`
-      INSERT INTO decisions (hive_id, goal_id, title, context, priority, status, kind)
+      INSERT INTO decisions (hive_id, goal_id, task_id, title, context, priority, status, kind)
       VALUES (
         ${parent.hive_id},
         ${parent.goal_id},
+        ${parentTaskId},
         ${`Doctor produced malformed diagnosis for: ${parent.title}`},
         ${decisionContext},
         'urgent',

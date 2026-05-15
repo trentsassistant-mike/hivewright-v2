@@ -16,6 +16,7 @@ describe("normalizeBillableUsage", () => {
     expect(usage).toEqual({
       freshInputTokens: 600,
       cachedInputTokens: 400,
+      cacheCreationTokens: null,
       cachedInputTokensKnown: true,
       tokensOutput: 250,
       totalContextTokens: 1_000,
@@ -57,10 +58,25 @@ describe("normalizeBillableUsage", () => {
 
     expect(usage.freshInputTokens).toBe(700);
     expect(usage.cachedInputTokens).toBe(300);
+    expect(usage.cacheCreationTokens).toBeNull();
     expect(usage.cachedInputTokensKnown).toBe(true);
     expect(usage.totalContextTokens).toBe(1_000);
     expect(usage.legacy.tokensInput).toBe(1_000);
     expect(usage.legacy.tokensOutput).toBe(125);
+  });
+
+  it("preserves explicit cache creation token accounting when providers expose it", () => {
+    const usage = normalizeBillableUsage({
+      totalInputTokens: 1_200,
+      cachedInputTokens: 300,
+      cacheCreationTokens: 150,
+      tokensOutput: 80,
+      estimatedBillableCostCents: 4,
+    });
+
+    expect(usage.cacheCreationTokens).toBe(150);
+    expect(usage.cachedInputTokens).toBe(300);
+    expect(usage.totalContextTokens).toBe(1_200);
   });
 
   it("estimates billable cost from fresh, cached, and output tokens", () => {

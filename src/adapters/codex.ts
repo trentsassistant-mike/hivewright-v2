@@ -8,6 +8,7 @@ import { CodexJsonChunker } from "./codex-stream-parser";
 import { resolveMcps, buildCodexMcpArgs } from "../tools/mcp-catalog";
 import { healthyProbeResult, isCodexRolloutThreadNotFound, probeResultFromBoundaryError } from "./probe-classifier";
 import { renderSessionPrompt } from "./context-renderer";
+import { buildUsageDetails, normalizeBillableUsage } from "../usage/billable-usage";
 import {
   AGENT_AUDIT_EVENTS,
   recordAgentAuditEventBestEffort,
@@ -255,6 +256,15 @@ export class CodexAdapter implements Adapter {
 
         if (code !== 0) {
           if (rolloutRegistrationFailed && allTexts) {
+            const usageDetails = result
+              ? buildUsageDetails(normalizeBillableUsage({
+                totalInputTokens: result.tokensInput,
+                freshInputTokens: result.freshInputTokens,
+                cachedInputTokens: result.cachedInputTokens,
+                cachedInputTokensKnown: result.cachedInputTokensKnown,
+                tokensOutput: result.tokensOutput,
+              }))
+              : undefined;
             resolve({
               success: true,
               output: allTexts,
@@ -263,10 +273,13 @@ export class CodexAdapter implements Adapter {
                 "Codex rollout registration failed after agent output was captured; salvaged output for idempotent dispatcher finalization.",
               runtimeWarnings: rolloutWarning ? [rolloutWarning] : undefined,
               tokensInput: result?.tokensInput,
+              freshInputTokens: result?.freshInputTokens,
               cachedInputTokens: result?.cachedInputTokens,
               cachedInputTokensKnown: result?.cachedInputTokensKnown,
               tokensOutput: result?.tokensOutput,
               modelUsed: result?.modelUsed,
+              estimatedBillableCostCents: 0,
+              usageDetails,
             });
             return;
           }
@@ -329,16 +342,26 @@ export class CodexAdapter implements Adapter {
         }
 
         if (result) {
+          const usageDetails = buildUsageDetails(normalizeBillableUsage({
+            totalInputTokens: result.tokensInput,
+            freshInputTokens: result.freshInputTokens,
+            cachedInputTokens: result.cachedInputTokens,
+            cachedInputTokensKnown: result.cachedInputTokensKnown,
+            tokensOutput: result.tokensOutput,
+          }));
           resolve({
             success: !result.isError,
             output: finalOutput || rawStdout,
             sessionId,
             runtimeWarnings: rolloutWarning ? [rolloutWarning] : undefined,
             tokensInput: result.tokensInput,
+            freshInputTokens: result.freshInputTokens,
             cachedInputTokens: result.cachedInputTokens,
             cachedInputTokensKnown: result.cachedInputTokensKnown,
             tokensOutput: result.tokensOutput,
             modelUsed: result.modelUsed,
+            estimatedBillableCostCents: 0,
+            usageDetails,
           });
           return;
         }

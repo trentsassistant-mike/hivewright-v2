@@ -59,6 +59,21 @@ describe("applyReclassify", () => {
 
     const [oldRefreshed] = await sql`SELECT superseded_by FROM classifications WHERE id = ${oldCls.id}`;
     expect(oldRefreshed.superseded_by).not.toBeNull();
+
+    const [event] = await sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE task_id = ${task.id}
+        AND event_type = 'task.lifecycle_transition'
+    `;
+    expect(event.metadata).toMatchObject({
+      taskId: task.id,
+      hiveId: bizId,
+      previousStatus: "failed",
+      nextStatus: "pending",
+      source: "doctor.applyReclassify",
+      reason: "executor said this isn't my job",
+    });
   });
 
   it("converts to goal when classifier returns null", async () => {
@@ -138,6 +153,21 @@ describe("applyConvertToGoal", () => {
     const [updated] = await sql`SELECT status, result_summary FROM tasks WHERE id = ${task.id}`;
     expect(updated.status).toBe("cancelled");
     expect(updated.result_summary).toContain(goal.id);
+
+    const [event] = await sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE task_id = ${task.id}
+        AND event_type = 'task.lifecycle_transition'
+    `;
+    expect(event.metadata).toMatchObject({
+      taskId: task.id,
+      hiveId: bizId,
+      previousStatus: "failed",
+      nextStatus: "cancelled",
+      source: "doctor.applyConvertToGoal",
+      reason: `Converted to goal: ${goal.id}`,
+    });
   });
 });
 

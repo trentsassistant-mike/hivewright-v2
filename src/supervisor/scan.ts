@@ -121,6 +121,8 @@ export async function scanHive(
   findings.push(...(await detectDormantGoals(sql, hiveId)));
   findings.push(...(await detectGoalLifecycleGaps(sql, hiveId)));
   findings.push(...(await detectOrphanOutputs(sql, hiveId)));
+  findings.push(...(await detectUnstartedGoals(sql, hiveId)));
+  findings.push(...(await detectGoalAppearsComplete(sql, hiveId)));
   sortFindings(findings);
   const report: HiveHealthReport = {
     hiveId,
@@ -1241,4 +1243,174 @@ async function detectOrphanOutputs(
       workProductCount: row.work_product_count,
     },
   }));
+}
+
+/**
+ * unstarted_goal — fires when an active goal is older than 4 hours and
+ * has produced zero tasks AND zero owner-authored comments. This is the
+ * pre-dormant gap: dormant_goal's 24h threshold sits idle while a goal
+ * the goal-supervisor never touched silently misses an entire workday.
+ *
+ * Owner-authored comments count as progress because they represent the
+ * owner asking a question or steering the goal — that is real activity
+ * the supervisor should not stomp. Comments authored by goal-supervisor
+ * or hive-supervisor do NOT count: those can be self-noise and the
+ * detector must keep firing until real human/system progress appears.
+ *
+ * Caps:
+ *   - 4h floor: short enough to be timely, long enough that legitimate
+ *     setup (decomposition + first sprint spawn) has had room to land.
+ *   - 7d ceiling: dormant_goal owns truly stale goals; we don't want
+ *     two findings firing on the same goal forever.
+ *
+ * Severity: warn — actionable but not critical.
+ *
+ * Suppression: standard supervisor_reports.findings_addressed match
+ * within 24h, mirroring the unsatisfied_completion / orphan_output
+ * pattern, so once the supervisor noops or wakes the goal we don't
+ * re-fire on every heartbeat.
+ */
+async function detectUnstartedGoals(
+  sql: Sql,
+  hiveId: string,
+): Promise<SupervisorFinding[]> {
+  const rows = await sql<
+    Array<{
+      id: string;
+      title: string;
+      created_at: Date;
+      hours_since_created: number;
+    }>
+  >`
+    SELECT
+      g.id, g.title, g.created_at,
+      EXTRACT(EPOCH FROM (NOW() - g.created_at)) / 3600 AS hours_since_created
+    FROM goals g
+    WHERE g.hive_id = ${hiveId}
+      AND g.status = 'active'
+      AND g.created_at < NOW() - interval '4 hours'
+      AND g.created_at > NOW() - interval '7 days'
+      AND NOT EXISTS (
+        SELECT 1 FROM tasks t WHERE t.goal_id = g.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM goal_comments gc
+        WHERE gc.goal_id = g.id
+          AND gc.created_by NOT IN ('goal-supervisor', 'hive-supervisor')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM supervisor_reports r
+        WHERE r.hive_id = ${hiveId}
+          AND r.ran_at > NOW() - interval '24 hours'
+          AND r.actions IS NOT NULL
+          AND r.actions->'findings_addressed' @> to_jsonb('unstarted_goal:' || g.id::text)
+      )
+  `;
+  return rows.map((row) => {
+    const hours = Number(row.hours_since_created);
+    return {
+      id: findingId("unstarted_goal", row.id),
+      kind: "unstarted_goal",
+      severity: "warn" as FindingSeverity,
+      ref: { goalId: row.id },
+      summary: `Active goal has no tasks or owner comments after ${hours.toFixed(1)}h: "${row.title}"`,
+      detail: {
+        createdAt: row.created_at,
+        hoursSinceCreated: hours,
+      },
+    };
+  });
+}
+
+/**
+ * goal_appears_complete — fires when an active goal has at least one
+ * substantive completed task (work_product attached OR result_summary
+ * ≥ 200 chars), zero open child tasks, and the latest completion is at
+ * least 30 minutes old. This catches goals where the work landed but
+ * the goal supervisor never flipped status to 'completed' — exactly
+ * the gap behind goal 1bedb2bd, where dormant_goal's 24h threshold
+ * never engages because tasks.updated_at is recent.
+ *
+ * Severity: info — genuinely ambiguous (the goal might intentionally
+ * be left open for follow-up sprints), so the LLM judges whether to
+ * close it, log an insight, or noop. The action menu is the same as
+ * dormant_goal: wake_goal, close_task on a placeholder, log_insight,
+ * or noop.
+ *
+ * Caps:
+ *   - 30m settle: matches orphan_output's "let the close path land"
+ *     window so we don't preempt a still-running goal-supervisor turn.
+ *   - 7d ceiling: dormant_goal owns truly stale goals — once the
+ *     latest completion is older than a week the goal has been
+ *     abandoned, not "appears complete".
+ *
+ * Suppression: standard supervisor_reports.findings_addressed match
+ * within 24h. Once the supervisor takes any action on this finding —
+ * including a noop classifying the goal as deliberately open — we
+ * stop re-firing.
+ */
+async function detectGoalAppearsComplete(
+  sql: Sql,
+  hiveId: string,
+): Promise<SupervisorFinding[]> {
+  const rows = await sql<
+    Array<{
+      id: string;
+      title: string;
+      latest_completion_at: Date;
+      minutes_since_latest_completion: number;
+      completed_with_output_count: number;
+    }>
+  >`
+    SELECT
+      g.id, g.title,
+      latest.completed_at AS latest_completion_at,
+      EXTRACT(EPOCH FROM (NOW() - latest.completed_at)) / 60 AS minutes_since_latest_completion,
+      latest.completed_with_output_count
+    FROM goals g
+    JOIN LATERAL (
+      SELECT
+        MAX(t.completed_at) AS completed_at,
+        COUNT(*) FILTER (
+          WHERE EXISTS (SELECT 1 FROM work_products wp WHERE wp.task_id = t.id)
+             OR COALESCE(length(t.result_summary), 0) >= 200
+        )::int AS completed_with_output_count
+      FROM tasks t
+      WHERE t.goal_id = g.id
+        AND t.status = 'completed'
+    ) latest ON TRUE
+    WHERE g.hive_id = ${hiveId}
+      AND g.status = 'active'
+      AND latest.completed_with_output_count > 0
+      AND latest.completed_at < NOW() - interval '30 minutes'
+      AND latest.completed_at > NOW() - interval '7 days'
+      AND NOT EXISTS (
+        SELECT 1 FROM tasks t
+        WHERE t.goal_id = g.id
+          AND t.status IN ('pending', 'active', 'blocked', 'in_review')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM supervisor_reports r
+        WHERE r.hive_id = ${hiveId}
+          AND r.ran_at > NOW() - interval '24 hours'
+          AND r.actions IS NOT NULL
+          AND r.actions->'findings_addressed' @> to_jsonb('goal_appears_complete:' || g.id::text)
+      )
+  `;
+  return rows.map((row) => {
+    const minutes = Number(row.minutes_since_latest_completion);
+    const completed = Number(row.completed_with_output_count);
+    return {
+      id: findingId("goal_appears_complete", row.id),
+      kind: "goal_appears_complete",
+      severity: "info" as FindingSeverity,
+      ref: { goalId: row.id },
+      summary: `Goal looks complete (${completed} substantive completed task${completed === 1 ? "" : "s"}, no open tasks, idle ${minutes.toFixed(0)}m): "${row.title}"`,
+      detail: {
+        latestCompletionAt: row.latest_completion_at,
+        minutesSinceLatestCompletion: minutes,
+        completedTasksWithOutput: completed,
+      },
+    };
+  });
 }

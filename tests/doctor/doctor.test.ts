@@ -52,6 +52,21 @@ describe("applyDoctorDiagnosis", () => {
     expect(updated.status).toBe("pending");
     expect(updated.brief).toBe("Clear brief with specific instructions");
     expect(updated.doctor_attempts).toBe(1);
+
+    const [event] = await sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE task_id = ${task.id}
+        AND event_type = 'task.lifecycle_transition'
+    `;
+    expect(event.metadata).toMatchObject({
+      taskId: task.id,
+      hiveId: bizId,
+      previousStatus: "failed",
+      nextStatus: "pending",
+      source: "doctor.applyDiagnosis.rewriteBrief",
+      reason: "Brief was ambiguous",
+    });
   });
 
   it("reassigns to a different role", async () => {
@@ -100,6 +115,21 @@ describe("applyDoctorDiagnosis", () => {
     expect(subs.length).toBe(2);
     expect(subs[0].title).toBe("doctor-test-sub1");
     expect(subs[1].title).toBe("doctor-test-sub2");
+
+    const [event] = await sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE task_id = ${task.id}
+        AND event_type = 'task.lifecycle_transition'
+    `;
+    expect(event.metadata).toMatchObject({
+      taskId: task.id,
+      hiveId: bizId,
+      previousStatus: "failed",
+      nextStatus: "cancelled",
+      source: "doctor.applyDiagnosis.splitTask",
+      reason: "Task too complex",
+    });
   });
 
   it("parks instead of splitting when replacement subtask budget would be exceeded", async () => {
@@ -275,6 +305,60 @@ describe("applyDoctorDiagnosis", () => {
     expect(updated.status).toBe("unresolvable");
     expect(updated.failure_reason).toContain("Recovery budget exhausted");
     expect(updated.failure_reason).toContain("open recovery decisions");
+  });
+
+  it("preserves project context via task_id when escalating a project-scoped task", async () => {
+    // Regression: previously the escalate path dropped the originating
+    // task linkage, so EA / dispatcher / dashboard could not resolve the
+    // project workspace from the resulting decision. Decisions has no
+    // project_id column, so we must round-trip through task_id.
+    const [project] = await sql`
+      INSERT INTO projects (hive_id, slug, name, workspace_path)
+      VALUES (${bizId}, 'doctor-test-escalate-project', 'Doctor Escalate Project', '/tmp/doctor-test/escalate')
+      RETURNING id
+    `;
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, description, project_id)
+      VALUES (${bizId}, 'Goal for escalate', 'desc', ${project.id})
+      RETURNING id
+    `;
+    const [task] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, project_id, goal_id)
+      VALUES (${bizId}, 'doctor-test-role', 'owner', 'doctor-test-escalate-scoped', 'Brief', 'failed', ${project.id}, ${goal.id})
+      RETURNING *
+    `;
+
+    const diagnosis: DoctorDiagnosis = {
+      action: "escalate",
+      details: "Cannot resolve automatically",
+      decisionTitle: "doctor-test-decision-scoped",
+      decisionContext: "Owner input needed",
+    };
+
+    await applyDoctorDiagnosis(sql, task.id, diagnosis);
+
+    const [decision] = await sql<{
+      id: string;
+      hive_id: string;
+      goal_id: string | null;
+      task_id: string | null;
+    }[]>`
+      SELECT id, hive_id, goal_id, task_id
+      FROM decisions WHERE title = 'doctor-test-decision-scoped'
+    `;
+    expect(decision.task_id).toBe(task.id);
+    expect(decision.goal_id).toBe(goal.id);
+    expect(decision.hive_id).toBe(bizId);
+
+    // The decision must be traceable back to the project-scoped task so
+    // downstream surfaces (EA, dispatcher, adapters, dashboard) can
+    // resolve the project workspace through the task row.
+    const [scoped] = await sql<{ project_id: string | null }[]>`
+      SELECT t.project_id
+      FROM decisions d JOIN tasks t ON t.id = d.task_id
+      WHERE d.id = ${decision.id}
+    `;
+    expect(scoped.project_id).toBe(project.id);
   });
 });
 

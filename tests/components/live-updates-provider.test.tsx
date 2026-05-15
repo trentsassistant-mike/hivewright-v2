@@ -159,6 +159,40 @@ describe("LiveUpdatesProvider", () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.dashboard.summary(bizId),
     });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["brief", bizId] });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["operations-map", "critical-items", bizId],
+    });
+  });
+
+  it("invalidates all dashboard panels on task_cancelled", () => {
+    const qc = new QueryClient();
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+    const bizId = "biz-cancel";
+    render(
+      <QueryClientProvider client={qc}>
+        <LiveUpdatesProvider hiveId={bizId}>
+          <div />
+        </LiveUpdatesProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      MockEventSource.instances[0].emit({
+        type: "task_cancelled",
+        taskId: "t-cancelled",
+        hiveId: bizId,
+        timestamp: "2026-04-15T00:00:00.000Z",
+      });
+    });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.tasks.active(bizId) });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["brief", bizId] });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["operations-map", "active-tasks", bizId],
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["operations-map", "critical-items", bizId],
+    });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["supervisor-reports", bizId] });
   });
 
   it("closes the SSE connection when hiveId changes", () => {

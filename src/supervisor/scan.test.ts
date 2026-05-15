@@ -1435,11 +1435,45 @@ describe.sequential("scanHive - deterministic HiveHealthReport", () => {
               NOW() - interval '2 hours',
               NOW() - interval '2 hours')
     `;
-    // Dormant goal (no open tasks, no recent activity).
+    // Dormant goal (had a thin task long ago, no open tasks, no recent activity).
+    // Anchored by a 48h-old completed task with no substantive output so dormant_goal
+    // fires without overlapping unstarted_goal (a task exists) or goal_appears_complete
+    // (no work_product, summary <200 chars).
     await sql`
       INSERT INTO goals (id, hive_id, title, status, session_id, created_at, updated_at)
       VALUES ('20202020-0000-0000-0000-000000000005', ${HIVE_ID}, 'dormant', 'active',
               'sess-1', NOW() - interval '48 hours', NOW() - interval '48 hours')
+    `;
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, goal_id,
+                         result_summary, completed_at, created_at, updated_at)
+      VALUES ('20202020-0000-0000-0000-00000000000a', ${HIVE_ID}, 'dev-agent', 'goal-supervisor',
+              'completed', 'old thin task', 'b',
+              '20202020-0000-0000-0000-000000000005',
+              'short', NOW() - interval '48 hours',
+              NOW() - interval '48 hours', NOW() - interval '48 hours')
+    `;
+    // Unstarted goal (5h old, zero tasks, zero owner comments).
+    await sql`
+      INSERT INTO goals (id, hive_id, title, status, session_id, created_at, updated_at)
+      VALUES ('20202020-0000-0000-0000-00000000000b', ${HIVE_ID}, 'unstarted', 'active',
+              'sess-2', NOW() - interval '5 hours', NOW() - interval '5 hours')
+    `;
+    // Goal-appears-complete (substantive completed task, no open tasks, settled >30m).
+    await sql`
+      INSERT INTO goals (id, hive_id, title, status, session_id, created_at, updated_at)
+      VALUES ('20202020-0000-0000-0000-00000000000c', ${HIVE_ID}, 'looks-done', 'active',
+              'sess-3', NOW() - interval '4 hours', NOW() - interval '1 hour')
+    `;
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, goal_id,
+                         result_summary, completed_at, created_at, updated_at)
+      VALUES ('20202020-0000-0000-0000-00000000000d', ${HIVE_ID}, 'dev-agent', 'goal-supervisor',
+              'completed', 'sprint deliverable', 'b',
+              '20202020-0000-0000-0000-00000000000c',
+              ${"x".repeat(250)},
+              NOW() - interval '1 hour',
+              NOW() - interval '4 hours', NOW() - interval '1 hour')
     `;
     // Orphan output (owner-direct, work_product, no follow-up, >30m).
     await sql`
@@ -1493,6 +1527,9 @@ describe.sequential("scanHive - deterministic HiveHealthReport", () => {
         "unsatisfied_completion",
         "dormant_goal",
         "orphan_output",
+        "unstarted_goal",
+        "goal_appears_complete",
+        "goal_lifecycle_gap",
       ]),
     );
 
@@ -1705,5 +1742,339 @@ describe.sequential("scanHive - role-library YAML → DB → detector terminal-f
     }
     expect(unsatisfied.sort()).toEqual([designTaskId, devTaskId, researchTaskId].sort());
     expect(orphans.sort()).toEqual([designTaskId, devTaskId, researchTaskId].sort());
+  });
+});
+
+/**
+ * unstarted_goal — fires when an active goal has been around long enough
+ * that the goal-supervisor / EA / owner should have produced at least one
+ * task or owner-authored comment, but neither has appeared. Catches goals
+ * that silently die before any sprint kicks off — exactly the gap behind
+ * goal 7bde09ba (4.5h old, 0 tasks, 0 comments) where dormant_goal's
+ * baseline-24h threshold sits idle.
+ */
+describe.sequential("scanHive - unstarted_goal detector", () => {
+  async function insertGoal(
+    id: string,
+    opts: {
+      status?: string;
+      createdHoursAgo?: number;
+      sessionId?: string | null;
+      hiveId?: string;
+    } = {},
+  ) {
+    const status = opts.status ?? "active";
+    const created = opts.createdHoursAgo ?? 5;
+    const sessionId = opts.sessionId ?? "sess-1";
+    const hive = opts.hiveId ?? HIVE_ID;
+    await sql`
+      INSERT INTO goals (id, hive_id, title, status, session_id, created_at, updated_at)
+      VALUES (${id}, ${hive}, 'g', ${status}, ${sessionId},
+              NOW() - (${created}::float || ' hours')::interval,
+              NOW() - (${created}::float || ' hours')::interval)
+    `;
+  }
+
+  it("flags an active goal with zero tasks and zero owner comments older than 4h", async () => {
+    await insertGoal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10", { createdHoursAgo: 5 });
+    const { findings } = await scanHive(sql, HIVE_ID);
+    const f = findings.filter((x) => x.kind === "unstarted_goal");
+    expect(f).toHaveLength(1);
+    expect(f[0].ref.goalId).toBe("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10");
+    expect(f[0].id).toBe("unstarted_goal:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10");
+    expect(f[0].severity).toBe("warn");
+  });
+
+  it("does NOT flag a goal younger than the 4h threshold", async () => {
+    await insertGoal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa11", { createdHoursAgo: 2 });
+    const { findings } = await scanHive(sql, HIVE_ID);
+    expect(findings.filter((x) => x.kind === "unstarted_goal")).toHaveLength(0);
+  });
+
+  it("does NOT flag a goal that has at least one task", async () => {
+    await insertGoal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa12", { createdHoursAgo: 6 });
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, status, title, brief, goal_id)
+      VALUES (${HIVE_ID}, 'dev-agent', 'goal-supervisor', 'pending', 't', 'b',
+              'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa12')
+    `;
+    const { findings } = await scanHive(sql, HIVE_ID);
+    expect(findings.filter((x) => x.kind === "unstarted_goal")).toHaveLength(0);
+  });
+
+  it("does NOT flag a goal with an owner-authored comment", async () => {
+    await insertGoal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa13", { createdHoursAgo: 6 });
+    await sql`
+      INSERT INTO goal_comments (goal_id, body, created_by)
+      VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa13', 'ping', 'owner')
+    `;
+    const { findings } = await scanHive(sql, HIVE_ID);
+    expect(findings.filter((x) => x.kind === "unstarted_goal")).toHaveLength(0);
+  });
+
+  it("DOES flag when the only comments are supervisor-authored (system noise should not satisfy progress)", async () => {
+    await insertGoal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa14", { createdHoursAgo: 6 });
+    await sql`
+      INSERT INTO goal_comments (goal_id, body, created_by)
+      VALUES
+        ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa14', 'wake', 'goal-supervisor'),
+        ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa14', 'note', 'hive-supervisor')
+    `;
+    const { findings } = await scanHive(sql, HIVE_ID);
+    const f = findings.filter((x) => x.kind === "unstarted_goal");
+    expect(f).toHaveLength(1);
+    expect(f[0].ref.goalId).toBe("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa14");
+  });
+
+  it("does NOT flag archived or non-active goals", async () => {
+    await insertGoal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa15", {
+      status: "archived",
+      createdHoursAgo: 12,
+    });
+    const { findings } = await scanHive(sql, HIVE_ID);
+    expect(findings.filter((x) => x.kind === "unstarted_goal")).toHaveLength(0);
+  });
+
+  it("does NOT flag a goal a supervisor heartbeat has already addressed within 24h (no respawn loop)", async () => {
+    await insertGoal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa16", { createdHoursAgo: 6 });
+    await sql`
+      INSERT INTO supervisor_reports (hive_id, ran_at, report, actions)
+      VALUES (
+        ${HIVE_ID},
+        NOW() - interval '1 hour',
+        ${sql.json({
+          hiveId: HIVE_ID,
+          scannedAt: new Date().toISOString(),
+          findings: [],
+          metrics: {
+            openTasks: 0,
+            activeGoals: 1,
+            openDecisions: 0,
+            tasksCompleted24h: 0,
+            tasksFailed24h: 0,
+          },
+        })},
+        ${sql.json({
+          summary: "addressed unstarted goal",
+          findings_addressed: [
+            "unstarted_goal:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa16",
+          ],
+          actions: [{ kind: "wake_goal", goalId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa16", reasoning: "kick" }],
+        })}
+      )
+    `;
+    const { findings } = await scanHive(sql, HIVE_ID);
+    expect(findings.filter((x) => x.kind === "unstarted_goal")).toHaveLength(0);
+  });
+
+  it("only reports goals belonging to the target hive", async () => {
+    await seedHive(OTHER_HIVE_ID, "other-hive");
+    await insertGoal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa17", { createdHoursAgo: 6 });
+    await insertGoal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa18", {
+      createdHoursAgo: 6,
+      hiveId: OTHER_HIVE_ID,
+    });
+    const { findings } = await scanHive(sql, HIVE_ID);
+    const f = findings.filter((x) => x.kind === "unstarted_goal");
+    expect(f).toHaveLength(1);
+    expect(f[0].ref.goalId).toBe("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa17");
+  });
+});
+
+/**
+ * goal_appears_complete — fires when an active goal has at least one
+ * completed task with substantive output (work_product OR result_summary
+ * ≥ 200 chars), zero open tasks, the latest completion is at least 30
+ * minutes old (so we don't preempt a still-running close path), and the
+ * goal is still status='active'. Catches the gap behind goal 1bedb2bd
+ * (sprint-completed deliverable, 0 open tasks, but goal stayed active
+ * indefinitely) where dormant_goal's 24h baseline never fires because
+ * `tasks.updated_at` is recent.
+ */
+describe.sequential("scanHive - goal_appears_complete detector", () => {
+  async function insertGoal(
+    id: string,
+    opts: {
+      status?: string;
+      createdHoursAgo?: number;
+      sessionId?: string | null;
+      hiveId?: string;
+    } = {},
+  ) {
+    const status = opts.status ?? "active";
+    const created = opts.createdHoursAgo ?? 2;
+    const sessionId = opts.sessionId ?? "sess-1";
+    const hive = opts.hiveId ?? HIVE_ID;
+    await sql`
+      INSERT INTO goals (id, hive_id, title, status, session_id, created_at, updated_at)
+      VALUES (${id}, ${hive}, 'g', ${status}, ${sessionId},
+              NOW() - (${created}::float || ' hours')::interval,
+              NOW() - (${created}::float || ' hours')::interval)
+    `;
+  }
+
+  async function insertCompletedTaskWithSummary(
+    id: string,
+    goalId: string,
+    opts: { minutesAgo?: number; summaryLen?: number; hiveId?: string } = {},
+  ) {
+    const minutes = opts.minutesAgo ?? 60;
+    const len = opts.summaryLen ?? 250;
+    const hive = opts.hiveId ?? HIVE_ID;
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, goal_id,
+                         result_summary, completed_at, created_at, updated_at)
+      VALUES (${id}, ${hive}, 'dev-agent', 'goal-supervisor', 'completed', 't', 'b', ${goalId},
+              ${"x".repeat(len)},
+              NOW() - (${minutes}::float || ' minutes')::interval,
+              NOW() - interval '2 hours',
+              NOW() - (${minutes}::float || ' minutes')::interval)
+    `;
+  }
+
+  it("flags an active goal with a substantive completed task and zero open tasks", async () => {
+    await insertGoal("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb20");
+    await insertCompletedTaskWithSummary(
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb20",
+      { minutesAgo: 60, summaryLen: 250 },
+    );
+    const { findings } = await scanHive(sql, HIVE_ID);
+    const f = findings.filter((x) => x.kind === "goal_appears_complete");
+    expect(f).toHaveLength(1);
+    expect(f[0].ref.goalId).toBe("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb20");
+    expect(f[0].id).toBe("goal_appears_complete:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb20");
+    expect(f[0].severity).toBe("info");
+  });
+
+  it("flags when substantive evidence is a work_product (not just result_summary)", async () => {
+    await insertGoal("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb21");
+    const taskId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2";
+    // Short summary, but with a work_product attached — still substantive.
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, goal_id,
+                         result_summary, completed_at, created_at, updated_at)
+      VALUES (${taskId}, ${HIVE_ID}, 'dev-agent', 'goal-supervisor', 'completed', 't', 'b',
+              'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb21',
+              'short', NOW() - interval '1 hour',
+              NOW() - interval '2 hours', NOW() - interval '1 hour')
+    `;
+    await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, content)
+      VALUES (${taskId}, ${HIVE_ID}, 'dev-agent', 'real deliverable body')
+    `;
+    const { findings } = await scanHive(sql, HIVE_ID);
+    const f = findings.filter((x) => x.kind === "goal_appears_complete");
+    expect(f).toHaveLength(1);
+    expect(f[0].ref.goalId).toBe("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb21");
+  });
+
+  it("does NOT flag while there is still an open task on the goal", async () => {
+    await insertGoal("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb22");
+    await insertCompletedTaskWithSummary(
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb22",
+    );
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, status, title, brief, goal_id, updated_at)
+      VALUES (${HIVE_ID}, 'dev-agent', 'goal-supervisor', 'pending', 't2', 'b',
+              'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb22', NOW() - interval '5 minutes')
+    `;
+    const { findings } = await scanHive(sql, HIVE_ID);
+    expect(findings.filter((x) => x.kind === "goal_appears_complete")).toHaveLength(0);
+  });
+
+  it("does NOT flag when the latest completion is younger than 30 minutes (allow close-path to land)", async () => {
+    await insertGoal("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb23");
+    await insertCompletedTaskWithSummary(
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb4",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb23",
+      { minutesAgo: 10 },
+    );
+    const { findings } = await scanHive(sql, HIVE_ID);
+    expect(findings.filter((x) => x.kind === "goal_appears_complete")).toHaveLength(0);
+  });
+
+  it("does NOT flag when only thin completed tasks exist (no work_product, summary <200 chars)", async () => {
+    await insertGoal("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb24");
+    await insertCompletedTaskWithSummary(
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb5",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb24",
+      { minutesAgo: 60, summaryLen: 50 },
+    );
+    const { findings } = await scanHive(sql, HIVE_ID);
+    expect(findings.filter((x) => x.kind === "goal_appears_complete")).toHaveLength(0);
+  });
+
+  it("does NOT flag goals that aren't active", async () => {
+    await insertGoal("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb25", { status: "completed" });
+    await insertCompletedTaskWithSummary(
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb6",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb25",
+    );
+    const { findings } = await scanHive(sql, HIVE_ID);
+    expect(findings.filter((x) => x.kind === "goal_appears_complete")).toHaveLength(0);
+  });
+
+  it("does NOT flag a goal a supervisor heartbeat has already addressed within 24h (no respawn loop)", async () => {
+    const goalId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb26";
+    await insertGoal(goalId);
+    await insertCompletedTaskWithSummary(
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb7",
+      goalId,
+    );
+    await sql`
+      INSERT INTO supervisor_reports (hive_id, ran_at, report, actions)
+      VALUES (
+        ${HIVE_ID},
+        NOW() - interval '1 hour',
+        ${sql.json({
+          hiveId: HIVE_ID,
+          scannedAt: new Date().toISOString(),
+          findings: [],
+          metrics: {
+            openTasks: 0,
+            activeGoals: 1,
+            openDecisions: 0,
+            tasksCompleted24h: 0,
+            tasksFailed24h: 0,
+          },
+        })},
+        ${sql.json({
+          summary: "marked goal complete",
+          findings_addressed: [`goal_appears_complete:${goalId}`],
+          actions: [
+            {
+              kind: "log_insight",
+              category: "goal_lifecycle",
+              content: "goal looks complete; awaiting close",
+            },
+          ],
+        })}
+      )
+    `;
+    const { findings } = await scanHive(sql, HIVE_ID);
+    expect(findings.filter((x) => x.kind === "goal_appears_complete")).toHaveLength(0);
+  });
+
+  it("only reports goals belonging to the target hive", async () => {
+    await seedHive(OTHER_HIVE_ID, "other-hive-2");
+    await insertGoal("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb27");
+    await insertGoal("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb28", {
+      hiveId: OTHER_HIVE_ID,
+    });
+    await insertCompletedTaskWithSummary(
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb8",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb27",
+    );
+    await insertCompletedTaskWithSummary(
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb9",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb28",
+      { hiveId: OTHER_HIVE_ID },
+    );
+    const { findings } = await scanHive(sql, HIVE_ID);
+    const f = findings.filter((x) => x.kind === "goal_appears_complete");
+    expect(f).toHaveLength(1);
+    expect(f[0].ref.goalId).toBe("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb27");
   });
 });

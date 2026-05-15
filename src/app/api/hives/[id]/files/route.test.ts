@@ -16,14 +16,22 @@ vi.mock("@/auth/users", () => ({
   canAccessHive: vi.fn(),
 }));
 
-import { GET } from "./route";
+vi.mock("@/memory/embeddings", () => ({
+  checkPgvectorAvailable: vi.fn(),
+  storeEmbedding: vi.fn(),
+}));
+
+import { GET, POST } from "./route";
 import { sql } from "../../../_lib/db";
 import { requireApiUser } from "../../../_lib/auth";
 import { canAccessHive } from "@/auth/users";
+import { checkPgvectorAvailable, storeEmbedding } from "@/memory/embeddings";
 
 const mockSql = sql as unknown as ReturnType<typeof vi.fn>;
 const mockRequireApiUser = requireApiUser as unknown as ReturnType<typeof vi.fn>;
 const mockCanAccessHive = canAccessHive as unknown as ReturnType<typeof vi.fn>;
+const mockCheckPgvectorAvailable = checkPgvectorAvailable as unknown as ReturnType<typeof vi.fn>;
+const mockStoreEmbedding = storeEmbedding as unknown as ReturnType<typeof vi.fn>;
 const params = { params: Promise.resolve({ id: "hive-1" }) };
 
 let tempRoot = "";
@@ -49,6 +57,8 @@ describe("GET /api/hives/[id]/files", () => {
     mockRequireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
+    mockCheckPgvectorAvailable.mockResolvedValue(false);
+    mockStoreEmbedding.mockResolvedValue(["embedding-1"]);
   });
 
   afterEach(async () => {
@@ -192,4 +202,83 @@ describe("GET /api/hives/[id]/files", () => {
       }),
     ]);
   });
+  it("uploads and indexes text reference documents into the hive reference folder", async () => {
+    mockHive();
+    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
+    const form = new FormData();
+    form.append("title", "Cancellation policy");
+    form.append("file", new File(["Refunds require 48 hours notice\napi_key=SECRET_VALUE"], "policy.md", { type: "text/markdown" }));
+
+    const res = await POST(new Request("http://localhost/api/hives/hive-1/files?category=reference-documents", {
+      method: "POST",
+      body: form,
+    }), params);
+    if (!res) {
+      throw new Error("Expected reference document upload response");
+    }
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.responseShape).toBe("hive-reference-document-upload-v1");
+    expect(body.data.item.name).toBe("Cancellation policy.md");
+    expect(body.data.item.id).toBe("11111111-1111-4111-8111-111111111111");
+    expect(body.data.item.indexedChunks).toBe(1);
+    await expect(fsp.readFile(path.join(tempRoot, "test-hive", "reference-documents", "Cancellation policy.md"), "utf8"))
+      .resolves.toBe("Refunds require 48 hours notice\napi_key=SECRET_VALUE");
+    expect(mockCheckPgvectorAvailable).toHaveBeenCalled();
+    expect(mockStoreEmbedding).toHaveBeenCalledWith(mockSql, expect.objectContaining({
+      sourceType: "hive_reference_document",
+      sourceId: "11111111-1111-4111-8111-111111111111",
+      hiveId: "hive-1",
+      pgvectorEnabled: false,
+      text: expect.stringContaining("Refunds require 48 hours notice"),
+    }));
+    expect(mockStoreEmbedding.mock.calls[0][1].text).toContain("api_key=[REDACTED]");
+  });
+
+  it("rejects reference document uploads when the reference folder escapes the hive workspace", async () => {
+    await fsp.mkdir(path.join(tempRoot, "test-hive"), { recursive: true });
+    await fsp.mkdir(path.join(tempRoot, "outside-reference-documents"), { recursive: true });
+    fs.symlinkSync(
+      path.join(tempRoot, "outside-reference-documents"),
+      path.join(tempRoot, "test-hive", "reference-documents"),
+      "dir",
+    );
+    mockHive();
+    const form = new FormData();
+    form.append("file", new File(["Do not leak"], "policy.md", { type: "text/markdown" }));
+
+    const res = await POST(new Request("http://localhost/api/hives/hive-1/files?category=reference-documents", {
+      method: "POST",
+      body: form,
+    }), params);
+    if (!res) {
+      throw new Error("Expected reference document upload response");
+    }
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("reference document directory escapes hive workspace");
+    await expect(fsp.access(path.join(tempRoot, "outside-reference-documents", "policy.md"))).rejects.toThrow();
+  });
+
+  it("lists reference documents as filesystem-backed files", async () => {
+    await fsp.mkdir(path.join(tempRoot, "test-hive", "reference-documents"), { recursive: true });
+    await fsp.writeFile(path.join(tempRoot, "test-hive", "reference-documents", "faq.md"), "# FAQ");
+    mockHive();
+
+    const res = await GET(request("/api/hives/hive-1/files?category=reference-documents"), params);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.items).toEqual([
+      expect.objectContaining({
+        name: "faq.md",
+        category: "reference-documents",
+        location: "reference-documents/faq.md",
+        previewable: true,
+      }),
+    ]);
+  });
+
 });

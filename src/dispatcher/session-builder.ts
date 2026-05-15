@@ -12,9 +12,19 @@ import {
   AGENT_AUDIT_EVENTS,
   recordAgentAuditEventBestEffort,
 } from "../audit/agent-events";
+import { MCP_CATALOG } from "../tools/mcp-catalog";
 import { loadStandingInstructions } from "../standing-instructions/manager";
 import { buildHiveContextBlock } from "../hives/context";
 import path from "path";
+
+type ToolsConfig = { mcps?: string[]; allowedTools?: string[] };
+
+type ToolGrantDecisionAudit = {
+  source: "role_tools_config" | "task_classifier";
+  toolsConfig: ToolsConfig | null;
+  requestedMcps: string[];
+  reasons: string[];
+};
 
 export async function buildSessionContext(
   sql: Sql,
@@ -68,7 +78,7 @@ export async function buildSessionContext(
 
   // Build the shared Hive Context block for the executor spawn. Sits
   // between Identity and Task layers in the adapter's translate() output.
-  const hiveContext = await buildHiveContextBlock(sql, task.hiveId, projectWorkspace);
+  const hiveContext = await buildHiveContextBlock(sql, task.hiveId, projectWorkspace, task.brief);
 
   // 2b. Load skills
   const roleSkillSlugs = await sql`SELECT skills FROM role_templates WHERE slug = ${task.assignedTo}`;
@@ -131,12 +141,14 @@ export async function buildSessionContext(
 
   // 3. Goal context
   let goalContext: string | null = null;
+  let goalSessionId: string | null = null;
   if (task.goalId) {
     const [goal] = await sql`
-      SELECT title, description, status, budget_cents, spent_cents
+      SELECT title, description, status, budget_cents, spent_cents, session_id
       FROM goals WHERE id = ${task.goalId}
     `;
     if (goal) {
+      goalSessionId = (goal.session_id as string | null) ?? null;
       goalContext = `Goal: ${goal.title}\n${goal.description || ""}\nStatus: ${goal.status}, Budget: ${goal.budget_cents ? `${goal.spent_cents}/${goal.budget_cents} cents` : "unlimited"}`;
     }
   }
@@ -203,7 +215,13 @@ export async function buildSessionContext(
     ? null
     : (role.fallback_adapter_type as string | null) ?? null;
 
-  let toolsConfig = (role.tools_config as { mcps?: string[]; allowedTools?: string[] } | null) ?? null;
+  let toolsConfig = (role.tools_config as ToolsConfig | null) ?? null;
+  let toolGrantDecision: ToolGrantDecisionAudit = {
+    source: "role_tools_config",
+    toolsConfig,
+    requestedMcps: normalizeToolList(toolsConfig?.mcps),
+    reasons: ["role has explicit tools_config"],
+  };
 
   // Auto-classify tools per task when the role doesn't have an explicit
   // toolsConfig set. The classifier reads the brief + role and grants the
@@ -215,8 +233,17 @@ export async function buildSessionContext(
       { taskBrief: task.brief, taskTitle: task.title, roleSlug: task.assignedTo },
       TASK_CLASSIFIER_MODE_DEFAULT,
     );
+    toolGrantDecision = {
+      source: "task_classifier",
+      toolsConfig: null,
+      requestedMcps: KNOWN_MCP_SLUGS,
+      reasons: classified.reasons.length > 0
+        ? classified.reasons
+        : ["task classifier found no matching tool grants"],
+    };
     if (classified.mcps.length > 0) {
       toolsConfig = { mcps: classified.mcps };
+      toolGrantDecision.toolsConfig = toolsConfig;
       // Surface the classifier's reasoning into the live task feed for
       // debuggability — callers will see why the agent has the tools it has.
       try {
@@ -236,6 +263,7 @@ export async function buildSessionContext(
     roleType === "qa" ||
     task.title.startsWith("[QA]") ||
     task.title.startsWith("[Replan] QA failed repeatedly");
+  await recordToolGrantDecision(sql, task, agentId, goalSessionId, toolGrantDecision);
 
   return {
     task: taskWithAttachments,
@@ -261,6 +289,72 @@ export async function buildSessionContext(
       ? { mode: "lean", reason: roleType === "executor" ? "executor_default" : "review_replan_cost_control" }
       : { mode: "full", reason: "non_executor" },
   };
+}
+
+const KNOWN_MCP_SLUGS = MCP_CATALOG.map((entry) => entry.slug).sort();
+const KNOWN_MCP_SLUG_SET = new Set(KNOWN_MCP_SLUGS);
+
+function normalizeToolList(value: string[] | undefined | null): string[] {
+  return Array.from(new Set(value ?? []));
+}
+
+function grantedKnownMcps(value: string[] | undefined | null): string[] {
+  return normalizeToolList(value).filter((slug) => KNOWN_MCP_SLUG_SET.has(slug));
+}
+
+function omittedTools(requested: string[], granted: string[]): string[] {
+  const grantedSet = new Set(granted);
+  return requested.filter((tool) => !grantedSet.has(tool));
+}
+
+async function recordToolGrantDecision(
+  sql: Sql,
+  task: ClaimedTask,
+  agentId: string,
+  sessionId: string | null,
+  decision: ToolGrantDecisionAudit,
+): Promise<void> {
+  const requestedMcps = normalizeToolList(decision.requestedMcps);
+  const requestedAllowedTools = normalizeToolList(decision.toolsConfig?.allowedTools);
+  const grantedMcps = grantedKnownMcps(decision.toolsConfig?.mcps);
+  const grantedAllowedTools = requestedAllowedTools;
+  const deniedMcps = omittedTools(requestedMcps, grantedMcps);
+  const deniedAllowedTools: string[] = [];
+
+  await recordAgentAuditEventBestEffort(sql, {
+    actor: { type: "system", id: "dispatcher", label: "Dispatcher" },
+    eventType: AGENT_AUDIT_EVENTS.toolGrantDecision,
+    hiveId: task.hiveId,
+    goalId: task.goalId,
+    taskId: task.id,
+    agentId,
+    targetType: "tool_grant",
+    targetId: task.assignedTo,
+    outcome: "success",
+    metadata: {
+      roleSlug: task.assignedTo,
+      assignee: task.assignedTo,
+      sessionId,
+      decisionSource: decision.source,
+      requestedToolSet: {
+        mcps: requestedMcps,
+        allowedTools: requestedAllowedTools,
+      },
+      grantedToolSet: {
+        mcps: grantedMcps,
+        allowedTools: grantedAllowedTools,
+      },
+      deniedToolSet: {
+        mcps: deniedMcps,
+        allowedTools: deniedAllowedTools,
+      },
+      omittedToolSet: {
+        mcps: deniedMcps,
+        allowedTools: deniedAllowedTools,
+      },
+      decisionReasons: decision.reasons,
+    },
+  });
 }
 
 export async function buildImageWorkProductContext(

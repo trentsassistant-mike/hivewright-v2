@@ -42,6 +42,11 @@ const taskRow = {
   retry_count: 0,
   doctor_attempts: 0,
   failure_reason: null,
+  fresh_input_tokens: 70,
+  cached_input_tokens: 30,
+  cached_input_tokens_known: true,
+  total_context_tokens: 100,
+  estimated_billable_cost_cents: 12,
   tokens_input: null,
   tokens_output: null,
   cost_cents: null,
@@ -50,6 +55,21 @@ const taskRow = {
   completed_at: null,
   created_at: new Date("2026-04-27T00:00:00Z"),
   updated_at: new Date("2026-04-27T00:00:00Z"),
+  usage_details: {
+    totalInputTokens: 100,
+    freshInputTokens: 70,
+    outputTokens: 25,
+    cacheReadTokens: 30,
+    cacheCreationTokens: 10,
+    estimatedBillableCostCents: 12,
+    cachedInputTokensKnown: true,
+  },
+  goal_budget_cents: 1000,
+  goal_spent_cents: 1000,
+  goal_budget_state: "paused",
+  goal_budget_warning_triggered_at: new Date("2026-04-27T00:00:00Z"),
+  goal_budget_enforced_at: new Date("2026-04-27T00:00:00Z"),
+  goal_budget_enforcement_reason: "Paused by budget",
 };
 
 describe("GET /api/tasks/[id]", () => {
@@ -105,6 +125,35 @@ describe("GET /api/tasks/[id]", () => {
     expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "member-1", "hive-1");
   });
 
+  it("returns normalized usage and parent goal budget status", async () => {
+    mockSql.mockResolvedValueOnce([taskRow]);
+    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([]);
+
+    const res = await GET(new Request("http://localhost/api/tasks/task-1"), params);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.usage).toEqual({
+      promptTokens: 100,
+      outputTokens: 25,
+      costCents: 12,
+      cacheReadTokens: 30,
+      cacheCreationTokens: 10,
+    });
+    expect(body.data.goalBudget).toMatchObject({
+      capCents: 1000,
+      spentCents: 1000,
+      remainingCents: 0,
+      percentUsed: 100,
+      warning: true,
+      paused: true,
+      state: "paused",
+      reason: "Paused by budget",
+    });
+  });
+
   it("includes image work product metadata and a safe download URL", async () => {
     mockSql.mockResolvedValueOnce([taskRow]);
     mockSql.mockResolvedValueOnce([]);
@@ -117,14 +166,23 @@ describe("GET /api/tasks/[id]", () => {
       mime_type: "image/png",
       width: 1024,
       height: 768,
-      model_name: "gpt-image-2",
-      model_snapshot: "gpt-image-2-2026-04-21",
-      prompt_tokens: 2500,
-      output_tokens: 1000,
-      cost_cents: 5,
-      metadata: { prompt: "honeycomb hero" },
-      created_at: new Date("2026-04-27T00:01:00Z"),
-    }]);
+        model_name: "gpt-image-2",
+        model_snapshot: "gpt-image-2-2026-04-21",
+        prompt_tokens: 2500,
+        output_tokens: 1000,
+        cost_cents: 5,
+        usage_details: {
+          totalInputTokens: 2500,
+          freshInputTokens: 1500,
+          outputTokens: 1000,
+          cacheReadTokens: 1000,
+          cacheCreationTokens: null,
+          estimatedBillableCostCents: 5,
+          cachedInputTokensKnown: true,
+        },
+        metadata: { prompt: "honeycomb hero" },
+        created_at: new Date("2026-04-27T00:01:00Z"),
+      }]);
 
     const res = await GET(new Request("http://localhost/api/tasks/task-1"), params);
     const body = await res.json();
@@ -137,7 +195,13 @@ describe("GET /api/tasks/[id]", () => {
         mimeType: "image/png",
         dimensions: { width: 1024, height: 768 },
         model: { name: "gpt-image-2", snapshot: "gpt-image-2-2026-04-21" },
-        usage: { promptTokens: 2500, outputTokens: 1000, costCents: 5 },
+        usage: {
+          promptTokens: 2500,
+          outputTokens: 1000,
+          costCents: 5,
+          cacheReadTokens: 1000,
+          cacheCreationTokens: null,
+        },
         metadata: { prompt: "honeycomb hero" },
         downloadUrl: "/api/work-products/wp-1/download",
       }),

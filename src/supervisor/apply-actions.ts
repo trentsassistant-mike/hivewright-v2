@@ -5,6 +5,10 @@ import type {
   SupervisorAction,
   SupervisorActions,
 } from "./types";
+import {
+  AGENT_AUDIT_EVENTS,
+  recordAgentAuditEventBestEffort,
+} from "../audit/agent-events";
 
 /**
  * Deterministic applier for supervisor actions. Mirrors the doctor
@@ -232,6 +236,30 @@ async function applyOne(
         )
         RETURNING id
       `;
+      await recordAgentAuditEventBestEffort(sql, {
+        eventType: AGENT_AUDIT_EVENTS.decisionCreated,
+        actor: {
+          type: "agent",
+          id: "hive-supervisor",
+          label: "hive-supervisor",
+        },
+        hiveId,
+        targetType: "decision",
+        targetId: row.id,
+        outcome: "success",
+        metadata: {
+          source: "supervisor.apply_actions",
+          actionKind: "create_decision",
+          decisionId: row.id,
+          tier: action.tier,
+          status: "ea_review",
+          priority,
+          kind: "supervisor_flagged",
+          optionCount: action.options?.length ?? null,
+          contextProvided: true,
+          recommendationProvided: Boolean(action.recommendation),
+        },
+      });
       return `create_decision(tier=${action.tier}): ${row.id} → ea_review`;
     }
 
@@ -270,10 +298,30 @@ async function applyOne(
     }
 
     case "log_insight": {
-      await sql`
+      const [row] = await sql<{ id: string }[]>`
         INSERT INTO hive_memory (hive_id, category, content, sensitivity)
         VALUES (${hiveId}, ${action.category}, ${action.content}, 'internal')
+        RETURNING id
       `;
+      await recordAgentAuditEventBestEffort(sql, {
+        eventType: AGENT_AUDIT_EVENTS.hiveMemoryWritten,
+        actor: {
+          type: "agent",
+          id: "hive-supervisor",
+          label: "hive-supervisor",
+        },
+        hiveId,
+        targetType: "hive_memory",
+        targetId: row.id,
+        outcome: "success",
+        metadata: {
+          source: "supervisor.apply_actions",
+          actionKind: "log_insight",
+          memoryId: row.id,
+          category: action.category,
+          sensitivity: "internal",
+        },
+      });
       return `log_insight(${action.category}): logged to hive_memory`;
     }
   }

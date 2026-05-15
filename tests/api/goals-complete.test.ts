@@ -39,6 +39,7 @@ beforeEach(async () => {
   delete process.env.INTERNAL_SERVICE_TOKEN;
   authState.authHeader = null;
   authState.sessionUser = null;
+  vi.clearAllMocks();
 
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "goals-complete-"));
   const cfgPath = path.join(tmp, "openclaw.json");
@@ -132,7 +133,60 @@ async function seedSessionUser(
   authState.sessionUser = { email };
 }
 
+async function attachProjectToGoal(options: { gitRepo: boolean }) {
+  const slug = options.gitRepo ? "gccomplete-git-project" : "gccomplete-project";
+  const [project] = await sql`
+    INSERT INTO projects (hive_id, slug, name, git_repo)
+    VALUES (${bizId}, ${slug}, ${slug}, ${options.gitRepo})
+    RETURNING id
+  `;
+  await sql`
+    UPDATE goals
+    SET project_id = ${project.id}
+    WHERE id = ${goalId}
+  `;
+  return project.id as string;
+}
+
 describe("POST /api/goals/[id]/complete", () => {
+  it("skips landed-state enforcement for a non-repository goal", async () => {
+    vi.mocked(gate.verifyLandedState).mockResolvedValue({
+      ok: false,
+      failures: ["Expected a clean working tree before completion."],
+    });
+
+    const res = await POST(
+      makeRequest(completionBody("gccomplete: non-repo goal completes")),
+      makeParams(goalId),
+    );
+    expect(res.status).toBe(200);
+    expect(vi.mocked(gate.verifyLandedState)).not.toHaveBeenCalled();
+
+    const body = await res.json();
+    expect(body.data.status).toBe("achieved");
+  });
+
+  it("enforces landed-state checks for git-backed project goals", async () => {
+    await attachProjectToGoal({ gitRepo: true });
+    vi.mocked(gate.verifyLandedState).mockResolvedValue({
+      ok: false,
+      failures: ["Expected a clean working tree before completion."],
+    });
+
+    const res = await POST(
+      makeRequest(completionBody("gccomplete: repo goal blocked by landed state")),
+      makeParams(goalId),
+    );
+    expect(res.status).toBe(500);
+    expect(vi.mocked(gate.verifyLandedState)).toHaveBeenCalledTimes(1);
+    await expect(res.json()).resolves.toMatchObject({
+      error: "Failed to complete goal",
+    });
+
+    const [goal] = await sql`SELECT status FROM goals WHERE id = ${goalId}`;
+    expect(goal.status).toBe("active");
+  });
+
   it("completes an active goal and returns achieved state with latestCompletion", async () => {
     const res = await POST(
       makeRequest(completionBody("gccomplete: all criteria met")),

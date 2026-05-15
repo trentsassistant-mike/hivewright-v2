@@ -1,11 +1,13 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { sql } from "@/app/api/_lib/db";
+import { serializeGoalBudgetStatus } from "@/budget/status";
 import { LiveActivityPanel } from "@/components/live-activity-panel";
 import { AttachmentsPanel } from "@/components/attachments-panel";
 import { TaskPipelineRouter } from "@/components/task-pipeline-router";
 import { readLatestCodexEmptyOutputDiagnostic } from "@/runtime-diagnostics/codex-empty-output";
 import { readLatestTaskContextProvenance } from "@/provenance/task-context";
+import { toPublicUsageSummary } from "@/usage/billable-usage";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +16,7 @@ const STATUS_BADGE: Record<string, string> = {
   active: "bg-blue-100 text-blue-800",
   completed: "bg-green-100 text-green-800",
   failed: "bg-red-100 text-red-800",
+  paused: "bg-amber-100 text-amber-900",
 };
 
 type TaskRow = {
@@ -33,10 +36,17 @@ type TaskRow = {
   retry_count: number;
   doctor_attempts: number;
   failure_reason: string | null;
+  usage_details: unknown;
   tokens_input: number | null;
   tokens_output: number | null;
   cost_cents: number | null;
   model_used: string | null;
+  goal_budget_cents: number | null;
+  goal_spent_cents: number | null;
+  goal_budget_state: "ok" | "warning" | "paused" | "hard_stopped" | null;
+  goal_budget_warning_triggered_at: Date | null;
+  goal_budget_enforced_at: Date | null;
+  goal_budget_enforcement_reason: string | null;
   started_at: Date | null;
   completed_at: Date | null;
   created_at: Date;
@@ -73,6 +83,39 @@ function formatSourceClass(sourceClass: string) {
   return sourceClass.replace(/_/g, " ");
 }
 
+function formatUsd(cents: number | null, digits = 2) {
+  if (cents === null || !Number.isFinite(cents)) return null;
+  return `$${(cents / 100).toFixed(digits)}`;
+}
+
+function budgetStateLabel(state: "ok" | "warning" | "paused" | "hard_stopped") {
+  if (state === "warning") return "Warning";
+  if (state === "paused" || state === "hard_stopped") return "Paused";
+  return "Normal";
+}
+
+function budgetStateClasses(state: "ok" | "warning" | "paused" | "hard_stopped") {
+  if (state === "warning") return "bg-amber-100 text-amber-900";
+  if (state === "paused" || state === "hard_stopped") return "bg-red-100 text-red-800";
+  return "bg-emerald-100 text-emerald-800";
+}
+
+function UsageStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
+  if (value === null || value === undefined || value === "") return null;
+  return (
+    <div className="rounded-md border bg-white/60 p-3 dark:bg-zinc-950/40">
+      <dt className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</dt>
+      <dd className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">{value}</dd>
+    </div>
+  );
+}
+
 export default async function TaskDetailPage({
   params,
 }: {
@@ -81,13 +124,20 @@ export default async function TaskDetailPage({
   const { id } = await params;
 
   const rows = await sql<TaskRow[]>`
-    SELECT id, hive_id, assigned_to, created_by, status, priority, title, brief,
-           goal_id, sprint_number, qa_required, acceptance_criteria,
-           result_summary, retry_count, doctor_attempts, failure_reason,
-           tokens_input, tokens_output, cost_cents, model_used,
-           started_at, completed_at, created_at, updated_at
-    FROM tasks
-    WHERE id = ${id}
+    SELECT t.id, t.hive_id, t.assigned_to, t.created_by, t.status, t.priority, t.title, t.brief,
+           t.goal_id, t.sprint_number, t.qa_required, t.acceptance_criteria,
+           t.result_summary, t.retry_count, t.doctor_attempts, t.failure_reason,
+           t.usage_details, t.tokens_input, t.tokens_output, t.cost_cents, t.model_used,
+           g.budget_cents AS goal_budget_cents,
+           g.spent_cents AS goal_spent_cents,
+           g.budget_state AS goal_budget_state,
+           g.budget_warning_triggered_at AS goal_budget_warning_triggered_at,
+           g.budget_enforced_at AS goal_budget_enforced_at,
+           g.budget_enforcement_reason AS goal_budget_enforcement_reason,
+           t.started_at, t.completed_at, t.created_at, t.updated_at
+    FROM tasks t
+    LEFT JOIN goals g ON g.id = t.goal_id
+    WHERE t.id = ${id}
   `;
 
   if (rows.length === 0) {
@@ -99,10 +149,29 @@ export default async function TaskDetailPage({
   const costDisplay =
     task.cost_cents !== null ? `$${(task.cost_cents / 100).toFixed(4)}` : null;
 
+  const usage = toPublicUsageSummary({
+    usageDetails: task.usage_details,
+    tokensInput: task.tokens_input,
+    tokensOutput: task.tokens_output,
+    costCents: task.cost_cents,
+  });
+
   const tokenDisplay =
-    task.tokens_input !== null && task.tokens_output !== null
-      ? `${task.tokens_input.toLocaleString()} in / ${task.tokens_output.toLocaleString()} out`
+    usage.promptTokens !== null && usage.outputTokens !== null
+      ? `${usage.promptTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out`
       : null;
+
+  const goalBudget = task.goal_budget_cents !== null || task.goal_spent_cents !== null
+    ? serializeGoalBudgetStatus({
+      budgetCents: task.goal_budget_cents,
+      spentCents: task.goal_spent_cents,
+      budgetState: task.goal_budget_state,
+      warningTriggeredAt: task.goal_budget_warning_triggered_at,
+      enforcedAt: task.goal_budget_enforced_at,
+      reason: task.goal_budget_enforcement_reason,
+      updatedAt: task.updated_at,
+    })
+    : null;
 
   const codexEmptyOutputDiagnostic = await readLatestCodexEmptyOutputDiagnostic(sql, id);
   const provenance = await readLatestTaskContextProvenance(sql, id);
@@ -158,6 +227,89 @@ export default async function TaskDetailPage({
           taskStatus={task.status as "pending" | "active" | "completed" | "failed"}
         />
       </div>
+
+      {(usage.promptTokens !== null || usage.outputTokens !== null || usage.costCents !== null || goalBudget) && (
+        <div className="rounded-lg border p-4 space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1">
+              <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">
+                AI Usage
+              </h2>
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                Canonical task-detail proof for recorded task usage and the persisted goal budget state.
+              </p>
+            </div>
+            {goalBudget && (
+              <span
+                className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${budgetStateClasses(goalBudget.state)}`}
+              >
+                {budgetStateLabel(goalBudget.state)}
+              </span>
+            )}
+          </div>
+
+          {goalBudget && (
+            <div className="space-y-3 rounded-md border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950/40">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                  Goal budget status
+                </h3>
+                {goalBudget.percentUsed !== null && (
+                  <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+                    {goalBudget.percentUsed}% used
+                  </p>
+                )}
+              </div>
+              <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <UsageStat label="Cap" value={formatUsd(goalBudget.capCents)} />
+                <UsageStat label="Spend" value={formatUsd(goalBudget.spentCents)} />
+                <UsageStat label="Remaining" value={formatUsd(goalBudget.remainingCents)} />
+                <UsageStat
+                  label="Status"
+                  value={goalBudget.percentUsed !== null ? `${goalBudget.percentUsed}% used` : budgetStateLabel(goalBudget.state)}
+                />
+              </dl>
+              {goalBudget.paused ? (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+                  <p className="font-medium">New AI work is paused because this goal reached its AI budget cap.</p>
+                  {goalBudget.reason && <p className="mt-1">Pause reason: {goalBudget.reason}</p>}
+                </div>
+              ) : goalBudget.warning ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                  Approaching the AI budget cap. New work can continue, but the next runs may trigger an automatic pause.
+                </div>
+              ) : (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-100">
+                  This task is within the current AI budget cap.
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Recorded task usage</h3>
+            <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <UsageStat
+                label="Prompt tokens"
+                value={usage.promptTokens !== null ? usage.promptTokens.toLocaleString() : null}
+              />
+              <UsageStat
+                label="Output tokens"
+                value={usage.outputTokens !== null ? usage.outputTokens.toLocaleString() : null}
+              />
+              <UsageStat
+                label="Cache read"
+                value={usage.cacheReadTokens !== null ? usage.cacheReadTokens.toLocaleString() : null}
+              />
+              <UsageStat
+                label="Cache write"
+                value={usage.cacheCreationTokens !== null ? usage.cacheCreationTokens.toLocaleString() : null}
+              />
+              <UsageStat label="Cost" value={formatUsd(usage.costCents)} />
+            </dl>
+          </div>
+        </div>
+      )}
 
       <div className="rounded-lg border p-4 space-y-3">
         <div className="space-y-1">

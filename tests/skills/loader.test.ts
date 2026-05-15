@@ -20,6 +20,15 @@ describe("loadSystemSkills", () => {
       expect(skill.content.length).toBeGreaterThan(10);
     }
   });
+
+  it("content toolkit includes the HiveWright product copy guard", () => {
+    const allSkills = loadSystemSkills(SYSTEM_SKILLS_PATH);
+    const skill = allSkills.find((s) => s.slug === "content-creation-toolkit");
+    expect(skill?.content).toContain("HiveWright Product Copy Guard");
+    expect(skill?.content).toContain("Do **not** introduce");
+    expect(skill?.content).toContain("AI pilot");
+    expect(skill?.content).toContain("AI spend budget");
+  });
 });
 
 describe("loadHiveSkills", () => {

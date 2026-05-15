@@ -10,11 +10,34 @@ import { CronExpressionParser } from "cron-parser";
 interface ScheduleTaskTemplate {
   kind?: string;
   goalId?: string | null;
+  projectId?: string | null;
+  project_id?: string | null;
   assignedTo?: string;
   title?: string;
   brief?: string;
   qaRequired?: boolean;
   priority?: number;
+}
+
+async function resolveScheduledTaskProjectId(
+  sql: Sql,
+  hiveId: string,
+  explicitProjectId: string | null | undefined,
+): Promise<string | null> {
+  const normalized = typeof explicitProjectId === "string" && explicitProjectId.trim() !== ""
+    ? explicitProjectId
+    : null;
+  if (normalized) return normalized;
+
+  const projects = await sql<{ id: string }[]>`
+    SELECT id
+    FROM projects
+    WHERE hive_id = ${hiveId}
+    ORDER BY created_at ASC, id ASC
+    LIMIT 2
+  `;
+
+  return projects.length === 1 ? projects[0].id : null;
 }
 
 export async function checkAndFireSchedules(sql: Sql): Promise<number> {
@@ -119,8 +142,14 @@ export async function checkAndFireSchedules(sql: Sql): Promise<number> {
         );
       }
     } else {
+      const projectId = await resolveScheduledTaskProjectId(
+        sql,
+        schedule.hive_id,
+        template.projectId ?? template.project_id ?? null,
+      );
+
       await sql`
-        INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, qa_required, priority)
+        INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, qa_required, priority, project_id)
         VALUES (
           ${schedule.hive_id},
           ${template.assignedTo ?? null},
@@ -128,7 +157,8 @@ export async function checkAndFireSchedules(sql: Sql): Promise<number> {
           ${template.title ?? null},
           ${template.brief ?? null},
           ${template.qaRequired ?? false},
-          ${template.priority ?? 5}
+          ${template.priority ?? 5},
+          ${projectId}
         )
       `;
     }

@@ -3,6 +3,7 @@ import { hives } from "./hives";
 import { roleTemplates } from "./role-templates";
 import { goals } from "./goals";
 import { projects } from "./projects";
+import type { UsageDetails } from "@/usage/billable-usage";
 
 export const tasks = pgTable("tasks", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -11,6 +12,8 @@ export const tasks = pgTable("tasks", {
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   status: varchar("status", { length: 50 }).default("pending").notNull(),
   priority: integer("priority").default(5).notNull(),
+  budgetCents: integer("budget_cents"),
+  spentCents: integer("spent_cents").default(0).notNull(),
   title: varchar("title", { length: 500 }).notNull(),
   brief: text("brief").notNull(),
   parentTaskId: uuid("parent_task_id"),
@@ -34,6 +37,7 @@ export const tasks = pgTable("tasks", {
   cachedInputTokensKnown: boolean("cached_input_tokens_known").default(false).notNull(),
   totalContextTokens: integer("total_context_tokens"),
   estimatedBillableCostCents: integer("estimated_billable_cost_cents"),
+  usageDetails: jsonb("usage_details").$type<UsageDetails>(),
   tokensInput: integer("tokens_input"),
   tokensOutput: integer("tokens_output"),
   costCents: integer("cost_cents"),

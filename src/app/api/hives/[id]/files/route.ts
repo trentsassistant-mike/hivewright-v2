@@ -6,11 +6,15 @@ import { requireApiUser } from "../../../_lib/auth";
 import { jsonError, jsonOk } from "../../../_lib/responses";
 import { canAccessHive } from "@/auth/users";
 import { hiveRootPath } from "@/hives/workspace-root";
+import { pathContains } from "@/runtime/paths";
+import { sanitizeAuditString } from "@/actions/redaction";
+import { checkPgvectorAvailable, storeEmbedding } from "@/memory/embeddings";
 
 const FILE_BROWSER_CATEGORIES = [
   "projects",
   "work-products",
   "attachments",
+  "reference-documents",
   "generated-docs",
   "ea-files",
 ] as const;
@@ -22,6 +26,7 @@ const CATEGORY_LABELS: Record<FileCategory, string> = {
   "projects": "Projects",
   "work-products": "Work Products",
   "attachments": "Attachments",
+  "reference-documents": "Reference Documents",
   "generated-docs": "Generated Docs",
   "ea-files": "EA Files",
 };
@@ -41,7 +46,10 @@ const TEXT_MIME_PREFIXES = ["text/"];
 const TEXT_MIME_TYPES = new Set(["application/json", "application/x-ndjson"]);
 const INLINE_PREVIEW_BYTES = 256 * 1024;
 const MAX_FS_ITEMS = 200;
-const FS_CATEGORIES = new Set<FileCategory>(["projects", "ea-files"]);
+const MAX_REFERENCE_UPLOAD_BYTES = 10 * 1024 * 1024;
+const MAX_REFERENCE_INDEX_CHARS = 40_000;
+const REFERENCE_DOCUMENT_SOURCE_TYPE = "hive_reference_document";
+const FS_CATEGORIES = new Set<FileCategory>(["projects", "reference-documents", "ea-files"]);
 const IGNORED_FS_NAMES = new Set([
   ".git",
   ".next",
@@ -157,6 +165,9 @@ function filesystemRoots(category: FileCategory, hive: HiveRow): FsRoot[] {
   const hiveRoot = hiveRootPath(hive.slug);
   if (category === "projects") {
     return [{ root: path.join(hiveRoot, "projects"), locationPrefix: "projects" }];
+  }
+  if (category === "reference-documents") {
+    return [{ root: path.join(hiveRoot, "reference-documents"), locationPrefix: "reference-documents" }];
   }
   if (category === "ea-files") {
     return [{ root: path.join(hiveRoot, "ea"), locationPrefix: "ea" }];
@@ -416,6 +427,7 @@ async function listCategory(hiveId: string, hive: HiveRow, category: FileCategor
   if (category === "projects") return listProjects(hiveId, hive);
   if (category === "work-products") return listWorkProducts(hiveId);
   if (category === "attachments") return listAttachments(hiveId);
+  if (category === "reference-documents") return listFilesystemCategory(hiveId, "reference-documents", filesystemRoots("reference-documents", hive));
   if (category === "generated-docs") return listGeneratedDocs(hiveId);
   return listFilesystemCategory(hiveId, "ea-files", filesystemRoots("ea-files", hive));
 }
@@ -613,6 +625,159 @@ async function downloadDatabase(hiveId: string, category: FileCategory, id: stri
     });
   }
   return jsonError("Download is not supported for this category", 400);
+}
+
+function sanitizeUploadFilename(filename: string): string {
+  const base = path.basename(filename).replace(/[^a-zA-Z0-9._ -]/g, "_").replace(/\s+/g, " ").trim();
+  const safe = base || "reference-document";
+  if (safe === "." || safe === "..") return "reference-document";
+  return safe.slice(0, 180);
+}
+
+async function uniqueUploadPath(root: string, filename: string): Promise<string> {
+  const parsed = path.parse(filename);
+  let candidate = filename;
+  for (let i = 1; i < 1000; i += 1) {
+    const fullPath = path.join(root, candidate);
+    try {
+      await fs.access(fullPath);
+    } catch {
+      return fullPath;
+    }
+    candidate = `${parsed.name}-${i}${parsed.ext}`;
+  }
+  throw new Error("Could not allocate upload filename");
+}
+
+function extractReferenceIndexText(filename: string, mimeType: string | null, bytes: Buffer): string | null {
+  if (!isTextLike(filename, mimeType)) return null;
+  const raw = bytes.toString("utf8").replace(/ /g, " ");
+  const redacted = sanitizeAuditString(raw).replace(/\s+/g, " ").trim();
+  if (!redacted) return null;
+  return redacted.slice(0, MAX_REFERENCE_INDEX_CHARS);
+}
+
+async function recordReferenceDocumentUpload(input: {
+  hiveId: string;
+  filename: string;
+  relativePath: string;
+  mimeType: string | null;
+  sizeBytes: number;
+  indexText: string | null;
+}): Promise<{ documentId: string; indexedChunks: number }> {
+  const [document] = await sql<{ id: string }[]>`
+    INSERT INTO hive_reference_documents (hive_id, filename, relative_path, mime_type, size_bytes, uploaded_at, updated_at)
+    VALUES (${input.hiveId}, ${input.filename}, ${input.relativePath}, ${input.mimeType}, ${input.sizeBytes}, now(), now())
+    RETURNING id
+  `;
+  const documentId = document.id;
+  if (!input.indexText) return { documentId, indexedChunks: 0 };
+
+  try {
+    const pgvectorEnabled = await checkPgvectorAvailable(sql);
+    const ids = await storeEmbedding(sql, {
+      sourceType: REFERENCE_DOCUMENT_SOURCE_TYPE,
+      sourceId: documentId,
+      hiveId: input.hiveId,
+      text: input.indexText,
+      pgvectorEnabled,
+    });
+    return { documentId, indexedChunks: ids.length };
+  } catch (err) {
+    console.warn("[reference-documents] Failed to index uploaded reference document:", err);
+    return { documentId, indexedChunks: 0 };
+  }
+}
+
+async function ensureHiveAccess(id: string) {
+  const authz = await requireApiUser();
+  if ("response" in authz) return { authz, response: authz.response } as const;
+  const [hive] = await sql`
+    SELECT id, slug, workspace_path
+    FROM hives
+    WHERE id = ${id}
+    LIMIT 1
+  `;
+  if (!hive) return { authz, response: jsonError("hive not found", 404) } as const;
+  if (!authz.user.isSystemOwner) {
+    const hasAccess = await canAccessHive(sql, authz.user.id, id);
+    if (!hasAccess) return { authz, response: jsonError("Forbidden: hive access required", 403) } as const;
+  }
+  return { authz, hive: hive as HiveRow } as const;
+}
+
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const { id } = await params;
+    if (!id) return jsonError("id is required", 400);
+    const url = new URL(request.url);
+    const category = normalizeCategory(url.searchParams.get("category"));
+    if (category !== "reference-documents") {
+      return jsonError("Uploads are only supported for reference documents", 400);
+    }
+    const access = await ensureHiveAccess(id);
+    if ("response" in access) return access.response;
+
+    const form = await request.formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) return jsonError("file is required", 400);
+    if (file.size > MAX_REFERENCE_UPLOAD_BYTES) return jsonError("file exceeds 10MB limit", 413);
+
+    const title = String(form.get("title") ?? "").trim();
+    const original = sanitizeUploadFilename(file.name || "reference-document");
+    const ext = path.extname(original);
+    const titled = title ? `${sanitizeUploadFilename(title)}${ext || path.extname(original)}` : original;
+    const filename = sanitizeUploadFilename(titled);
+    const hiveRoot = hiveRootPath(access.hive.slug);
+    await fs.mkdir(hiveRoot, { recursive: true });
+    const realHiveRoot = await fs.realpath(hiveRoot);
+    const configuredRoot = filesystemRoots("reference-documents", access.hive)[0].root;
+    await fs.mkdir(configuredRoot, { recursive: true });
+    const root = await fs.realpath(configuredRoot);
+    if (!pathContains(root, realHiveRoot)) {
+      return jsonError("reference document directory escapes hive workspace", 400);
+    }
+    const targetPath = await uniqueUploadPath(root, filename);
+    if (!pathContains(targetPath, root)) {
+      return jsonError("upload path escapes reference document directory", 400);
+    }
+    const bytes = Buffer.from(await file.arrayBuffer());
+    await fs.writeFile(targetPath, bytes, { flag: "wx" });
+
+    const relativePath = path.relative(root, targetPath).split(path.sep).join("/");
+    const savedFilename = path.basename(targetPath);
+    const mimeType = file.type || null;
+    const indexText = extractReferenceIndexText(savedFilename, mimeType, bytes);
+    const indexing = await recordReferenceDocumentUpload({
+      hiveId: id,
+      filename: savedFilename,
+      relativePath,
+      mimeType,
+      sizeBytes: bytes.length,
+      indexText,
+    });
+
+    return jsonOk({
+      item: {
+        id: indexing.documentId,
+        name: savedFilename,
+        category: "reference-documents",
+        location: `reference-documents/${relativePath}`,
+        sizeBytes: bytes.length,
+        indexedChunks: indexing.indexedChunks,
+        previewUrl: isTextLike(targetPath, mimeType) && bytes.length <= INLINE_PREVIEW_BYTES
+          ? buildFsUrl(id, "reference-documents", "preview", relativePath)
+          : null,
+        downloadUrl: buildFsUrl(id, "reference-documents", "download", relativePath),
+      },
+      responseShape: "hive-reference-document-upload-v1",
+    });
+  } catch {
+    return jsonError("Failed to upload reference document", 500);
+  }
 }
 
 export async function GET(

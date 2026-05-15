@@ -1,6 +1,7 @@
 export * from "./hive-targets";
 export * from "./hive-ideas";
 export * from "./hives";
+export * from "./budget-controls";
 export * from "./model-catalog";
 export * from "./model-discovery-runs";
 export * from "./model-capability-scores";
@@ -19,6 +20,7 @@ export * from "./schedules";
 export * from "./credentials";
 export * from "./role-memory";
 export * from "./hive-memory";
+export * from "./hive-reference-documents";
 export * from "./insights";
 export * from "./work-products";
 export * from "./memory-embeddings";

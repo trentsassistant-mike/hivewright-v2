@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { defaultCache } from "@serwist/next/worker";
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
-import { Serwist } from "serwist";
+import { NetworkOnly, Serwist } from "serwist";
 
 declare global {
   interface WorkerGlobalScope extends SerwistGlobalConfig {
@@ -16,7 +16,18 @@ const serwist = new Serwist({
   skipWaiting: true,
   clientsClaim: true,
   navigationPreload: true,
-  runtimeCaching: defaultCache,
+  runtimeCaching: [
+    // Dashboard API responses and SSE streams must always hit the network.
+    // Serwist's default Next cache uses NetworkFirst for /api GETs with a
+    // timeout/cache fallback, which can leave React Query refetches showing
+    // stale dashboard state after live events.
+    {
+      matcher: ({ sameOrigin, url: { pathname } }) => sameOrigin && pathname.startsWith("/api/"),
+      method: "GET",
+      handler: new NetworkOnly(),
+    },
+    ...defaultCache,
+  ],
 });
 
 // Push notification handler

@@ -15,6 +15,8 @@ import { canAccessHive } from "@/auth/users";
 import { calculateCostCents } from "@/adapters/provider-config";
 import { getHiveCreationPause } from "@/operations/creation-pause";
 import { getHiveResumeReadiness } from "@/hives/resume-readiness";
+import { summarizeAiBudget } from "@/budget/ai-budget-policy";
+import { serializeGoalBudgetStatus } from "@/budget/status";
 
 /**
  * Owner Brief — the synthesis surface that makes HiveWright feel like it's
@@ -27,6 +29,7 @@ import { getHiveResumeReadiness } from "@/hives/resume-readiness";
 type GoalHealth = "on_track" | "waiting_on_owner" | "stalled" | "at_risk" | "achieved";
 
 interface TaskCostRow {
+  estimatedBillableCostCents?: number | null;
   costCents: number | null;
   tokensInput: number | null;
   tokensOutput: number | null;
@@ -34,6 +37,9 @@ interface TaskCostRow {
 }
 
 function effectiveCents(row: TaskCostRow): number {
+  if (row.estimatedBillableCostCents !== null && row.estimatedBillableCostCents !== undefined) {
+    return Math.max(0, Math.trunc(row.estimatedBillableCostCents));
+  }
   if (row.costCents && row.costCents > 0) return row.costCents;
   const tin = row.tokensInput ?? 0;
   const tout = row.tokensOutput ?? 0;
@@ -99,7 +105,8 @@ async function getBrief(request: Request, db: Sql) {
          GROUP BY goal_id
       )
       SELECT g.id, g.title, g.status, g.budget_cents, g.spent_cents,
-             g.created_at, g.updated_at,
+             g.budget_state, g.budget_warning_triggered_at, g.budget_enforced_at,
+             g.budget_enforcement_reason, g.created_at, g.updated_at,
              COALESCE(tc.total, 0) AS total,
              COALESCE(tc.done, 0) AS done,
              COALESCE(tc.failed, 0) AS failed,
@@ -161,12 +168,13 @@ async function getBrief(request: Request, db: Sql) {
     // COALESCE(started_at, updated_at) since started_at isn't reliably
     // populated on every historical row.
     const costRows = (await db`
-      SELECT cost_cents, tokens_input, tokens_output, model_used,
+      SELECT estimated_billable_cost_cents, cost_cents, tokens_input, tokens_output, model_used,
              COALESCE(started_at, updated_at) AS ts
       FROM tasks
       WHERE hive_id = ${hiveId}::uuid
         AND COALESCE(started_at, updated_at) > NOW() - INTERVAL '30 days'
     `) as unknown as Array<{
+      estimated_billable_cost_cents: number | null;
       cost_cents: number | null;
       tokens_input: number | null;
       tokens_output: number | null;
@@ -177,6 +185,7 @@ async function getBrief(request: Request, db: Sql) {
     const nowMs = Date.now();
     for (const r of costRows) {
       const cents = effectiveCents({
+        estimatedBillableCostCents: r.estimated_billable_cost_cents,
         costCents: r.cost_cents,
         tokensInput: r.tokens_input,
         tokensOutput: r.tokens_output,
@@ -208,12 +217,16 @@ async function getBrief(request: Request, db: Sql) {
     };
 
     const creationPause = await getHiveCreationPause(db, hiveId);
-    const operationLock = {
-      creationPause,
-      resumeReadiness: await getHiveResumeReadiness(db, {
+    const [aiBudget, resumeReadiness] = await Promise.all([
+      summarizeAiBudget(db, hiveId),
+      getHiveResumeReadiness(db, {
         hiveId,
         creationPause,
       }),
+    ]);
+    const operationLock = {
+      creationPause,
+      resumeReadiness,
     };
 
     const [ideasRow] = (await db`
@@ -315,6 +328,15 @@ async function getBrief(request: Request, db: Sql) {
         pendingDecisions,
         budgetCents: g.budget_cents as number | null,
         spentCents: g.spent_cents as number | null,
+        budget: serializeGoalBudgetStatus({
+          budgetCents: g.budget_cents as number | null,
+          spentCents: g.spent_cents as number | null,
+          budgetState: (g.budget_state as "ok" | "warning" | "paused" | "hard_stopped" | null) ?? null,
+          warningTriggeredAt: g.budget_warning_triggered_at as Date | null,
+          enforcedAt: g.budget_enforced_at as Date | null,
+          reason: (g.budget_enforcement_reason as string | null) ?? null,
+          updatedAt: g.updated_at as Date,
+        }),
       };
     });
 
@@ -370,6 +392,7 @@ async function getBrief(request: Request, db: Sql) {
       },
       supervisor,
       initiative,
+      aiBudget,
       operationLock,
       ideas: {
         openCount: Number(ideasRow?.open_ideas_count ?? 0),

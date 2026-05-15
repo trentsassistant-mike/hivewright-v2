@@ -4,6 +4,7 @@ import {
   runModelHealthProbes,
   selectDueModelHealthProbeRoutes,
   type ModelProbeAdapterFactory,
+  type DueModelHealthProbeRoute,
 } from "@/model-health/probe-runner";
 
 const DEFAULT_MAX_ROUTES_PER_TICK = 5;
@@ -15,6 +16,10 @@ export interface SystemModelHealthRenewalResult {
   healthy: number;
   unhealthy: number;
   skippedLocked: number;
+}
+
+interface PausedHiveRow {
+  hive_id: string;
 }
 
 export async function runSystemModelHealthRenewal(
@@ -30,10 +35,9 @@ export async function runSystemModelHealthRenewal(
   const now = input.now ?? new Date();
   const maxRoutesPerTick = input.maxRoutesPerTick ?? DEFAULT_MAX_ROUTES_PER_TICK;
   const logger = input.logger ?? console;
-  const candidates = await selectDueModelHealthProbeRoutes(sql, {
+  const candidates = await selectRenewalCandidates(sql, {
     now,
     limit: maxRoutesPerTick,
-    includeOnDemand: false,
   });
 
   let attempted = 0;
@@ -98,6 +102,62 @@ export async function runSystemModelHealthRenewal(
     unhealthy,
     skippedLocked,
   };
+}
+
+async function selectRenewalCandidates(
+  sql: Sql,
+  input: { now: Date; limit: number },
+): Promise<DueModelHealthProbeRoute[]> {
+  const prioritized: DueModelHealthProbeRoute[] = [];
+  const seen = new Set<string>();
+
+  const pausedHives = await sql<PausedHiveRow[]>`
+    SELECT hive_id
+    FROM hive_runtime_locks
+    WHERE creation_paused = true
+    ORDER BY updated_at DESC NULLS LAST, hive_id ASC
+  `;
+
+  for (const hive of pausedHives) {
+    if (prioritized.length >= input.limit) break;
+    const hiveCandidates = await selectDueModelHealthProbeRoutes(sql, {
+      now: input.now,
+      limit: input.limit - prioritized.length,
+      hiveId: hive.hive_id,
+      includeOnDemand: false,
+    });
+    for (const candidate of hiveCandidates) {
+      const key = renewalCandidateKey(candidate);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      prioritized.push(candidate);
+      if (prioritized.length >= input.limit) break;
+    }
+  }
+
+  if (prioritized.length >= input.limit) {
+    return prioritized;
+  }
+
+  const globalCandidates = await selectDueModelHealthProbeRoutes(sql, {
+    now: input.now,
+    limit: input.limit,
+    includeOnDemand: false,
+  });
+
+  for (const candidate of globalCandidates) {
+    const key = renewalCandidateKey(candidate);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    prioritized.push(candidate);
+    if (prioritized.length >= input.limit) break;
+  }
+
+  return prioritized;
+}
+
+function renewalCandidateKey(candidate: DueModelHealthProbeRoute): string {
+  return `${candidate.fingerprint}:${candidate.healthModelId}`;
 }
 
 async function acquireRenewalLock(

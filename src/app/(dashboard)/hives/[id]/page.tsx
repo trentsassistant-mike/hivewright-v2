@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
+import type { FormEvent } from "react";
 import { useParams } from "next/navigation";
 import { HiveSectionNav } from "@/components/hive-section-nav";
 
@@ -10,7 +11,12 @@ interface Hive {
   type: string;
   description: string | null;
   mission: string | null;
+  softwareStack: string | null;
   workspacePath: string | null;
+  aiBudget: {
+    capCents: number;
+    window: "daily" | "weekly" | "monthly" | "all_time";
+  };
   createdAt: string;
 }
 
@@ -36,16 +42,35 @@ export default function HiveDetailPage() {
   const [contextPreview, setContextPreview] = useState<string>("");
   const [showPreview, setShowPreview] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [uploadSaveState, setUploadSaveState] = useState<"idle" | "uploading" | "uploaded" | "error">("idle");
+  const [selectedReferenceFile, setSelectedReferenceFile] = useState<File | null>(null);
   const [changesSaveState, setChangesSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [referenceTitle, setReferenceTitle] = useState("");
+  const [budgetSaveState, setBudgetSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Load hive + targets. Called on mount and after any mutation.
   const reload = useCallback(async () => {
-    const [hiveRes, targetsRes] = await Promise.all([
-      fetch(`/api/hives/${id}`).then(r => r.json()),
-      fetch(`/api/hives/${id}/targets`).then(r => r.json()),
-    ]);
-    setHive(hiveRes.data ?? null);
-    setTargets(targetsRes.data || []);
+    setLoadError(null);
+    const readJson = async (res: Response) => {
+      const text = await res.text();
+      const body = text ? JSON.parse(text) : null;
+      if (!res.ok) {
+        throw new Error(body?.error ?? `Request failed with ${res.status}`);
+      }
+      return body;
+    };
+
+    try {
+      const [hiveRes, targetsRes] = await Promise.all([
+        fetch(`/api/hives/${id}`).then(readJson),
+        fetch(`/api/hives/${id}/targets`).then(readJson),
+      ]);
+      setHive(hiveRes.data ?? null);
+      setTargets(targetsRes.data || []);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "Failed to load hive");
+    }
   }, [id]);
 
   useEffect(() => {
@@ -61,6 +86,41 @@ export default function HiveDetailPage() {
       body: JSON.stringify(patch),
     });
     if (res.ok) reload();
+  };
+
+  const saveBudget = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!hive) return;
+    const form = new FormData(event.currentTarget);
+    const dollars = Number(form.get("aiBudgetDollars"));
+    const window = String(form.get("aiBudgetWindow") ?? hive.aiBudget.window);
+
+    if (!Number.isFinite(dollars) || dollars < 0) {
+      setBudgetSaveState("error");
+      setTimeout(() => setBudgetSaveState("idle"), 4000);
+      return;
+    }
+
+    setBudgetSaveState("saving");
+    const res = await fetch(`/api/hives/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        aiBudget: {
+          capCents: Math.round(dollars * 100),
+          window,
+        },
+      }),
+    });
+
+    if (res.ok) {
+      setBudgetSaveState("saved");
+      await reload();
+      setTimeout(() => setBudgetSaveState("idle"), 2000);
+    } else {
+      setBudgetSaveState("error");
+      setTimeout(() => setBudgetSaveState("idle"), 4000);
+    }
   };
 
   const addTarget = async () => {
@@ -107,8 +167,42 @@ export default function HiveDetailPage() {
     }
     setShowPreview(true);
   };
+  const uploadReferenceDocument = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedReferenceFile) {
+      setUploadSaveState("error");
+      setTimeout(() => setUploadSaveState("idle"), 3000);
+      return;
+    }
+    const form = new FormData();
+    form.append("file", selectedReferenceFile);
+    if (referenceTitle.trim()) form.append("title", referenceTitle.trim());
+    setUploadSaveState("uploading");
+    const res = await fetch(`/api/hives/${id}/files?category=reference-documents`, {
+      method: "POST",
+      body: form,
+    });
+    if (res.ok) {
+      setUploadSaveState("uploaded");
+      setSelectedReferenceFile(null);
+      setReferenceTitle("");
+      const input = event.currentTarget.querySelector<HTMLInputElement>("input[type='file']");
+      if (input) input.value = "";
+      setTimeout(() => setUploadSaveState("idle"), 2500);
+    } else {
+      setUploadSaveState("error");
+      setTimeout(() => setUploadSaveState("idle"), 5000);
+    }
+  };
 
-  if (!hive) return <p className="text-amber-600/70 dark:text-amber-400/60">Loading…</p>;
+
+  if (!hive) {
+    return (
+      <p className={loadError ? "text-red-600 dark:text-red-400" : "text-amber-600/70 dark:text-amber-400/60"}>
+        {loadError ?? "Loading…"}
+      </p>
+    );
+  }
 
   const openTargets = targets.filter(t => t.status === "open");
   const historyTargets = targets.filter(t => t.status !== "open");
@@ -203,6 +297,54 @@ export default function HiveDetailPage() {
 
       <section className="space-y-4 rounded-lg border p-6">
         <div>
+          <h2 className="text-lg font-medium text-amber-900 dark:text-amber-100">Budget controls</h2>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            Hive-level overall cap for billable AI spend. Subscription/OAuth token usage is excluded from this budget.
+          </p>
+        </div>
+        <form onSubmit={saveBudget} className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+          <label className="space-y-1 text-sm">
+            <span className="font-medium text-zinc-700 dark:text-zinc-200">Hive budget cap (USD)</span>
+            <input
+              name="aiBudgetDollars"
+              type="number"
+              min="0"
+              step="1"
+              defaultValue={Math.round((hive.aiBudget?.capCents ?? 0) / 100)}
+              className="w-full rounded-md border px-3 py-2 text-sm dark:bg-zinc-800"
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="font-medium text-zinc-700 dark:text-zinc-200">Time window</span>
+            <select
+              name="aiBudgetWindow"
+              defaultValue={hive.aiBudget?.window ?? "all_time"}
+              className="w-full rounded-md border px-3 py-2 text-sm dark:bg-zinc-800"
+            >
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="all_time">All time</option>
+            </select>
+          </label>
+          <button
+            disabled={budgetSaveState === "saving"}
+            className="cursor-pointer rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-wait disabled:opacity-50"
+          >
+            {budgetSaveState === "saving" ? "Saving…" : "Save budget"}
+          </button>
+        </form>
+        <div className="flex flex-wrap gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+          <span>Current cap: ${((hive.aiBudget?.capCents ?? 0) / 100).toFixed(2)}</span>
+          <span>•</span>
+          <span>Window: {(hive.aiBudget?.window ?? "all_time").replace("_", " ")}</span>
+          {budgetSaveState === "saved" && <span className="text-green-600 dark:text-green-400">✓ Saved</span>}
+          {budgetSaveState === "error" && <span className="text-red-600 dark:text-red-400">Save failed</span>}
+        </div>
+      </section>
+
+      <section className="space-y-4 rounded-lg border p-6">
+        <div>
           <h2 className="text-lg font-medium text-amber-900 dark:text-amber-100">Description</h2>
           <p className="text-sm text-zinc-500 dark:text-zinc-400">One-line tagline — shows on hive cards and lists.</p>
         </div>
@@ -231,6 +373,57 @@ export default function HiveDetailPage() {
         />
       </section>
 
+      <section className="space-y-4 rounded-lg border p-6">
+        <div>
+          <h2 className="text-lg font-medium text-amber-900 dark:text-amber-100">Reference documents</h2>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            Upload owner-approved rules, FAQs, cancellation policies, SOPs, and other source material.
+            Uploaded files are listed in agent context so workers know where to look, but file contents are only opened when relevant. All files are visible under the Files tab.
+          </p>
+        </div>
+        <form onSubmit={uploadReferenceDocument} className="space-y-3">
+          <input
+            value={referenceTitle}
+            onChange={e => setReferenceTitle(e.target.value)}
+            className="w-full rounded-md border px-3 py-2 text-sm dark:bg-zinc-800"
+            placeholder="Optional title / label (e.g. Cancellation policy)"
+          />
+          <input
+            type="file"
+            onChange={e => setSelectedReferenceFile(e.target.files?.[0] ?? null)}
+            className="block w-full cursor-pointer rounded-md border px-3 py-2 text-sm dark:bg-zinc-800"
+            accept=".txt,.md,.markdown,.json,.csv,.yaml,.yml,.pdf,.doc,.docx"
+          />
+          <div className="flex items-center gap-3">
+            <button
+              disabled={uploadSaveState === "uploading"}
+              className="cursor-pointer rounded-md border px-4 py-2 text-sm font-medium hover:bg-zinc-50 disabled:cursor-wait disabled:opacity-50 dark:hover:bg-zinc-800"
+            >
+              {uploadSaveState === "uploading" ? "Uploading…" : "Upload reference document"}
+            </button>
+            {uploadSaveState === "uploaded" && <span className="text-sm text-green-600 dark:text-green-400">✓ Uploaded</span>}
+            {uploadSaveState === "error" && <span className="text-sm text-red-600 dark:text-red-400">Upload failed</span>}
+          </div>
+        </form>
+      </section>
+
+      <section className="space-y-4 rounded-lg border p-6">
+        <div>
+          <h2 className="text-lg font-medium text-amber-900 dark:text-amber-100">Software and systems used</h2>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            List the apps, accounts, and operational systems this hive uses — e.g. Gmail, NewBook, Xero, Shopify.
+            Agents receive this as reference context even before a connector exists.
+          </p>
+        </div>
+        <textarea
+          rows={5}
+          value={hive.softwareStack ?? ""}
+          onChange={e => setHive({ ...hive, softwareStack: e.target.value })}
+          className="w-full rounded-md border px-3 py-2 font-mono text-sm dark:bg-zinc-800"
+          placeholder="- Gmail: customer email&#10;- NewBook: bookings/PMS&#10;- ..."
+        />
+      </section>
+
       <div className="flex items-center gap-3">
         <button
           onClick={async () => {
@@ -241,6 +434,7 @@ export default function HiveDetailPage() {
               body: JSON.stringify({
                 description: hive.description ?? "",
                 mission: hive.mission ?? "",
+                softwareStack: hive.softwareStack ?? "",
               }),
             });
             if (res.ok) {

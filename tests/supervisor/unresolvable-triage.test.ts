@@ -306,6 +306,19 @@ describe("reconcileUnresolvableTasks", () => {
       supersedingTaskId: null,
       fixTaskId: null,
     });
+    const [event] = await sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE task_id = ${taskId}
+        AND event_type = 'task.lifecycle_transition'
+    `;
+    expect(event.metadata).toMatchObject({
+      taskId,
+      hiveId: HIVE_ID,
+      previousStatus: "unresolvable",
+      nextStatus: "pending",
+      source: "supervisor.unresolvableTriage.retryTask",
+    });
   });
 
   it("stores spawned doctor task evidence when runtime health remains blocked", async () => {
@@ -417,6 +430,19 @@ describe("reconcileUnresolvableTasks", () => {
       reasonIncludes: "Recovery budget exhausted",
     });
     expect(evidence.links.supersedingTaskId).toBe(replacementId);
+    const [event] = await sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE task_id = ${taskId}
+        AND event_type = 'task.lifecycle_transition'
+    `;
+    expect(event.metadata).toMatchObject({
+      taskId,
+      hiveId: HIVE_ID,
+      previousStatus: "unresolvable",
+      nextStatus: "superseded",
+      source: "supervisor.unresolvableTriage.duplicateHistorical",
+    });
   });
 
   it("stores fix task evidence when later completed work resolves the source", async () => {
@@ -459,5 +485,18 @@ describe("reconcileUnresolvableTasks", () => {
       reasonIncludes: "Recovery budget exhausted",
     });
     expect(evidence.links.fixTaskId).toBe(fixTaskId);
+    const [event] = await sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE task_id = ${taskId}
+        AND event_type = 'task.lifecycle_transition'
+    `;
+    expect(event.metadata).toMatchObject({
+      taskId,
+      hiveId: HIVE_ID,
+      previousStatus: "unresolvable",
+      nextStatus: "completed",
+      source: "supervisor.unresolvableTriage.fixedByLaterWork",
+    });
   });
 });

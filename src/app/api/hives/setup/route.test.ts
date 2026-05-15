@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => {
     sql,
     tx,
     mkdirSync: vi.fn(),
+    existsSync: vi.fn(() => false),
+    rmSync: vi.fn(),
     requireApiUser: vi.fn(),
     seedDefaultSchedules: vi.fn(),
     getConnectorDefinition: vi.fn(),
@@ -23,7 +25,11 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("fs", () => ({
-  default: { mkdirSync: mocks.mkdirSync },
+  default: {
+    mkdirSync: mocks.mkdirSync,
+    existsSync: mocks.existsSync,
+    rmSync: mocks.rmSync,
+  },
 }));
 
 vi.mock("../../_lib/db", () => ({
@@ -222,5 +228,34 @@ describe("POST /api/hives/setup", () => {
     expect(body.error).toBe("That hive address is already in use. Please choose a different hive name or custom hive address.");
     expect(mocks.sql.begin).not.toHaveBeenCalled();
     expect(mocks.mkdirSync).not.toHaveBeenCalled();
+  });
+
+  it("fails the whole setup when a role override targets a missing role", async () => {
+    mocks.tx.unsafe.mockResolvedValueOnce([]);
+
+    const res = await POST(setupRequest({
+      hive: { name: "Test Hive", slug: "test-hive", type: "digital" },
+      roleOverrides: {
+        "ghost-role": { adapterType: "codex", recommendedModel: "openai-codex/gpt-5.5" },
+      },
+      connectors: [{
+        connectorSlug: "discord-webhook",
+        displayName: "Discord",
+        fields: { webhookUrl: "https://example.test/webhook" },
+      }],
+      initialGoal: "Goal that should not persist",
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.data).toBeUndefined();
+    expect(body.error).toBe("A selected role could not be updated. Please review the runtime choices and try again.");
+    expect(mocks.sql.begin).toHaveBeenCalledTimes(1);
+    expect(mocks.storeCredential).not.toHaveBeenCalled();
+    const queries = mocks.tx.mock.calls
+      .map((call: unknown[]) => (Array.isArray(call[0]) ? (call[0] as string[]).join(" ") : ""))
+      .join("\n");
+    expect(queries).not.toMatch(/INSERT INTO connector_installs/);
+    expect(queries).not.toMatch(/INSERT INTO goals/);
   });
 });

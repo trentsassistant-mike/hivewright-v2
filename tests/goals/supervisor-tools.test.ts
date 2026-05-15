@@ -379,10 +379,12 @@ describe("executeSupervisorTool", () => {
   });
 
   it("creates a decision via create_decision", async () => {
+    const sensitiveContext = "audit-regression goal raw decision context must not appear";
+    const sensitiveRecommendation = "audit-regression goal raw recommendation must not appear";
     const result = await executeSupervisorTool(sql, goalId, bizId, "create_decision", {
       title: "suptool-decision",
-      context: "Need budget increase",
-      recommendation: "Increase by $50",
+      context: sensitiveContext,
+      recommendation: sensitiveRecommendation,
       priority: "normal",
     });
     expect(result.success).toBe(true);
@@ -392,6 +394,43 @@ describe("executeSupervisorTool", () => {
     expect(decisions[0].goal_id).toBe(goalId);
     // EA-first pipeline: non-auto-approved supervisor decisions go to EA review.
     expect(decisions[0].status).toBe("ea_review");
+
+    const [audit] = await sql<{
+      event_type: string;
+      actor_label: string | null;
+      hive_id: string | null;
+      goal_id: string | null;
+      target_type: string;
+      target_id: string | null;
+      metadata: Record<string, unknown>;
+    }[]>`
+      SELECT event_type, actor_label, hive_id, goal_id, target_type, target_id, metadata
+      FROM agent_audit_events
+      WHERE target_type = 'decision'
+        AND target_id = ${decisions[0].id}
+    `;
+    expect(audit).toMatchObject({
+      event_type: "decision.created",
+      actor_label: "goal-supervisor",
+      hive_id: bizId,
+      goal_id: goalId,
+      target_type: "decision",
+      target_id: decisions[0].id,
+    });
+    expect(audit.metadata).toMatchObject({
+      source: "goals.supervisor_tools",
+      toolName: "create_decision",
+      decisionId: decisions[0].id,
+      goalId,
+      status: "ea_review",
+      priority: "normal",
+      autoApproved: false,
+      contextProvided: true,
+      recommendationProvided: true,
+    });
+    const metadata = JSON.stringify(audit.metadata);
+    expect(metadata).not.toContain(sensitiveContext);
+    expect(metadata).not.toContain(sensitiveRecommendation);
   });
 
   it("creates schedules with an object task template", async () => {
@@ -567,8 +606,9 @@ describe("executeSupervisorTool", () => {
   });
 
   it("marks goal achieved via mark_goal_achieved (clears session, writes canonical memory)", async () => {
+    const sensitiveSummary = "suptool: audit-regression raw completion summary must not appear";
     const result = await executeSupervisorTool(sql, goalId, bizId, "mark_goal_achieved", {
-      summary: "suptool: Everything is done!",
+      summary: sensitiveSummary,
       evidence: [
         {
           type: "test",
@@ -609,6 +649,40 @@ describe("executeSupervisorTool", () => {
       rationale: "The final plan structure is reusable for similar launch goals.",
       action: "Draft a reusable launch-plan template after owner review.",
     });
+
+    const [audit] = await sql<{
+      event_type: string;
+      actor_label: string | null;
+      hive_id: string | null;
+      goal_id: string | null;
+      target_type: string;
+      target_id: string | null;
+      metadata: Record<string, unknown>;
+    }[]>`
+      SELECT event_type, actor_label, hive_id, goal_id, target_type, target_id, metadata
+      FROM agent_audit_events
+      WHERE target_type = 'hive_memory'
+        AND target_id = ${mem[0].id}
+    `;
+    expect(audit).toMatchObject({
+      event_type: "hive_memory.written",
+      actor_label: "goal-supervisor",
+      hive_id: bizId,
+      goal_id: goalId,
+      target_type: "hive_memory",
+      target_id: mem[0].id,
+    });
+    expect(audit.metadata).toMatchObject({
+      source: "goals.complete_goal",
+      actionKind: "mark_goal_achieved",
+      memoryId: mem[0].id,
+      goalId,
+      category: "general",
+      sensitivity: "internal",
+      evidenceBundleCount: 1,
+      completionStatus: "achieved",
+    });
+    expect(JSON.stringify(audit.metadata)).not.toContain(sensitiveSummary);
   });
 
   it("rejects mark_goal_achieved when evidence is missing or empty", async () => {

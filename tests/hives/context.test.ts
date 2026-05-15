@@ -1,19 +1,23 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 import { buildHiveContextBlock } from "../../src/hives/context";
 
 async function insertHive(overrides: Partial<{
   name: string; slug: string; type: string;
-  description: string | null; mission: string | null;
+  description: string | null; mission: string | null; softwareStack: string | null;
 }> = {}): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
-    INSERT INTO hives (name, slug, type, description, mission)
+    INSERT INTO hives (name, slug, type, description, mission, software_stack)
     VALUES (
       ${overrides.name ?? "Test Hive"},
       ${overrides.slug ?? `test-hive-${Math.random().toString(36).slice(2, 8)}`},
       ${overrides.type ?? "digital"},
       ${overrides.description ?? null},
-      ${overrides.mission ?? null}
+      ${overrides.mission ?? null},
+      ${overrides.softwareStack ?? null}
     )
     RETURNING id
   `;
@@ -32,8 +36,18 @@ async function insertTarget(
 }
 
 describe("buildHiveContextBlock", () => {
+  let tempRoot = "";
+  const originalRoot = process.env.HIVES_WORKSPACE_ROOT;
+
   beforeEach(async () => {
     await truncateAll(sql);
+    tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "hw-context-"));
+    process.env.HIVES_WORKSPACE_ROOT = tempRoot;
+  });
+
+  afterEach(async () => {
+    process.env.HIVES_WORKSPACE_ROOT = originalRoot;
+    if (tempRoot) await fsp.rm(tempRoot, { recursive: true, force: true });
   });
 
   it("emits full block with mission + targets", async () => {
@@ -137,6 +151,56 @@ describe("buildHiveContextBlock", () => {
     expect(block).toContain("- Unquantified aspiration");
     expect(block).not.toContain("- Unquantified aspiration:");
     expect(block).not.toContain("(by ");
+  });
+
+  it("includes software stack and a lightweight reference document manifest without document contents", async () => {
+    const slug = "lakes-bushland";
+    const id = await insertHive({
+      name: "Lakes Bushland",
+      slug,
+      softwareStack: "- Gmail: customer email\n- NewBook: bookings and guest records",
+    });
+    const referenceRoot = path.join(tempRoot, slug, "reference-documents");
+    await fsp.mkdir(referenceRoot, { recursive: true });
+    await fsp.writeFile(path.join(referenceRoot, "cancellation-policy.md"), "Guests need 48 hours notice for cancellation credit.");
+
+    const block = await buildHiveContextBlock(sql, id);
+
+    expect(block).toContain("**Software / Systems Used:**");
+    expect(block).toContain("- Gmail: customer email");
+    expect(block).toContain("- NewBook: bookings and guest records");
+    expect(block).toContain("**Owner Reference Documents Available:**");
+    expect(block).toContain("- cancellation-policy.md (`reference-documents/cancellation-policy.md`)");
+    expect(block).toContain("Open/read these files only when the current task is relevant");
+    expect(block).not.toContain("Guests need 48 hours notice for cancellation credit.");
+  });
+
+  it("includes task-relevant capped reference snippets without dumping unrelated document chunks", async () => {
+    const slug = "lakes-reference-search";
+    const id = await insertHive({ name: "Lakes Bushland", slug });
+    const referenceRoot = path.join(tempRoot, slug, "reference-documents");
+    await fsp.mkdir(referenceRoot, { recursive: true });
+    await fsp.writeFile(path.join(referenceRoot, "cancellation-policy.md"), "Cancellation policy source file");
+
+    const [doc] = await sql<{ id: string }[]>`
+      INSERT INTO hive_reference_documents (hive_id, filename, relative_path, mime_type, size_bytes)
+      VALUES (${id}, 'cancellation-policy.md', 'cancellation-policy.md', 'text/markdown', 128)
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO memory_embeddings (source_type, source_id, hive_id, chunk_text)
+      VALUES
+        ('hive_reference_document', ${doc.id}, ${id}, 'Cancellation refunds require 48 hours notice before arrival and must be handled in NewBook.'),
+        ('hive_reference_document', ${doc.id}, ${id}, 'Pet rules: dogs must be on leash near the bushland trail.')
+    `;
+
+    const block = await buildHiveContextBlock(sql, id, null, "Guest asks for a cancellation refund after booking in NewBook");
+
+    expect(block).toContain("**Owner Reference Documents Available:**");
+    expect(block).toContain("**Relevant Owner Reference Snippets:**");
+    expect(block).toContain("[cancellation-policy.md · reference-documents/cancellation-policy.md]");
+    expect(block).toContain("Cancellation refunds require 48 hours notice");
+    expect(block).not.toContain("dogs must be on leash");
   });
 
   it("returns empty string when hive id is unknown", async () => {

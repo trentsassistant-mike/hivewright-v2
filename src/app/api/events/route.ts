@@ -4,6 +4,10 @@ import { requireApiUser } from "../_lib/auth";
 import { canAccessHive } from "@/auth/users";
 
 const DATABASE_URL = process.env.DATABASE_URL || "postgresql://hivewright@localhost:5432/hivewrightv2";
+const HEARTBEAT_MS = 15_000;
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -25,6 +29,7 @@ export async function GET(request: Request) {
   }
 
   const encoder = new TextEncoder();
+  let cleanup: (() => Promise<void>) | undefined;
   const stream = new ReadableStream({
     async start(controller) {
       const listener = postgres(DATABASE_URL, { max: 1 });
@@ -35,6 +40,32 @@ export async function GET(request: Request) {
           controller.enqueue(encoder.encode(`data: ${data}\n\n`));
         } catch {
           closed = true;
+        }
+      };
+      const sendHeartbeat = () => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`: heartbeat ${new Date().toISOString()}\n\n`));
+        } catch {
+          closed = true;
+        }
+      };
+      const heartbeat = setInterval(sendHeartbeat, HEARTBEAT_MS);
+      let cleanedUp = false;
+      cleanup = async () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        closed = true;
+        clearInterval(heartbeat);
+        try {
+          await listener.end();
+        } catch {
+          /* ignore */
+        }
+        try {
+          controller.close();
+        } catch {
+          /* ignore */
         }
       };
 
@@ -89,26 +120,20 @@ export async function GET(request: Request) {
         })();
       });
 
-      request.signal.addEventListener("abort", async () => {
-        closed = true;
-        try {
-          await listener.end();
-        } catch {
-          /* ignore */
-        }
-        try {
-          controller.close();
-        } catch {
-          /* ignore */
-        }
+      request.signal.addEventListener("abort", () => {
+        void cleanup?.();
       });
+    },
+    cancel() {
+      void cleanup?.();
     },
   });
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
     },
   });
 }

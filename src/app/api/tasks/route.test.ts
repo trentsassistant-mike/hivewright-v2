@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => {
     sql,
     requireApiUser: vi.fn(),
     requireSystemOwner: vi.fn(),
+    enforceInternalTaskHiveScope: vi.fn(),
+    isInternalServiceAccountUser: vi.fn(),
     canAccessHive: vi.fn(),
   };
 });
@@ -17,13 +19,15 @@ vi.mock("../_lib/db", () => ({
 vi.mock("../_lib/auth", () => ({
   requireApiUser: mocks.requireApiUser,
   requireSystemOwner: mocks.requireSystemOwner,
+  enforceInternalTaskHiveScope: mocks.enforceInternalTaskHiveScope,
+  isInternalServiceAccountUser: mocks.isInternalServiceAccountUser,
 }));
 
 vi.mock("@/auth/users", () => ({
   canAccessHive: mocks.canAccessHive,
 }));
 
-import { GET } from "./route";
+import { GET, POST } from "./route";
 
 describe("GET /api/tasks access control", () => {
   beforeEach(() => {
@@ -31,6 +35,10 @@ describe("GET /api/tasks access control", () => {
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
+    mocks.requireSystemOwner.mockResolvedValue({
+      user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
+    });
+    mocks.enforceInternalTaskHiveScope.mockResolvedValue({ ok: true, scope: null });
     mocks.sql.unsafe.mockResolvedValue([]);
   });
 
@@ -90,5 +98,80 @@ describe("GET /api/tasks access control", () => {
     expect(res.status).toBe(200);
     expect(mocks.canAccessHive).not.toHaveBeenCalled();
     expect(mocks.sql.unsafe.mock.calls[0][1]).toEqual(["hive-a"]);
+  });
+});
+
+describe("POST /api/tasks payload compatibility", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.requireSystemOwner.mockResolvedValue({
+      user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
+    });
+    mocks.enforceInternalTaskHiveScope.mockResolvedValue({ ok: true, scope: null });
+    mocks.sql.mockReset();
+  });
+
+  it("accepts snake_case task-create fields used by agent tool contracts", async () => {
+    mocks.sql
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ "?column?": 1 }])
+      .mockResolvedValueOnce([
+        {
+          id: "task-1",
+          hive_id: "hive-1",
+          assigned_to: "dev-agent",
+          created_by: "goal-supervisor",
+          status: "pending",
+          priority: 5,
+          title: "Implement cost reporting",
+          brief: "Add the reporting fields.",
+          parent_task_id: null,
+          goal_id: "goal-1",
+          project_id: null,
+          sprint_number: 2,
+          qa_required: true,
+          acceptance_criteria: "Cost report separates fresh, cached, and output tokens.",
+          result_summary: null,
+          retry_count: 0,
+          doctor_attempts: 0,
+          failure_reason: null,
+          tokens_input: null,
+          tokens_output: null,
+          cost_cents: null,
+          model_used: null,
+          started_at: null,
+          completed_at: null,
+          created_at: new Date("2026-05-06T00:00:00Z"),
+          updated_at: new Date("2026-05-06T00:00:00Z"),
+        },
+      ]);
+
+    const res = await POST(new Request("http://localhost/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        hiveId: "hive-1",
+        assigned_to: "dev-agent",
+        title: "Implement cost reporting",
+        brief: "Add the reporting fields.",
+        goal_id: "goal-1",
+        sprint_number: 2,
+        qa_required: true,
+        created_by: "system",
+        acceptance_criteria: "Cost report separates fresh, cached, and output tokens.",
+      }),
+    }));
+
+    const body = await res.json();
+    expect(res.status).toBe(201);
+    expect(body.data).toMatchObject({
+      assignedTo: "dev-agent",
+      createdBy: "goal-supervisor",
+      goalId: "goal-1",
+      sprintNumber: 2,
+      qaRequired: true,
+      acceptanceCriteria: "Cost report separates fresh, cached, and output tokens.",
+    });
   });
 });

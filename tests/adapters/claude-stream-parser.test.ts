@@ -46,6 +46,7 @@ describe("parseStreamJsonLine", () => {
       tokensInput: 1_000,
       freshInputTokens: 700,
       cachedInputTokens: 300,
+      cacheCreationTokens: 100,
       cachedInputTokensKnown: true,
       tokensOutput: 125,
     });

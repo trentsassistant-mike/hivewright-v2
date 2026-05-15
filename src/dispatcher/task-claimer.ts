@@ -7,8 +7,11 @@ import {
   validatePipelineOutputContract,
 } from "@/pipelines/service";
 import type { ClaimedTask } from "./types";
+import { pauseOverBudgetGoalsForClaim } from "./budget-policy";
 
 export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask | null> {
+  await pauseOverBudgetGoalsForClaim(sql);
+
   // Per-role serialisation: skip a pending task if its assigned role has
   // already reached its `role_templates.concurrency_limit` of active tasks.
   //
@@ -30,6 +33,21 @@ export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask 
       SELECT t.id FROM tasks t
       WHERE t.status = 'pending'
         AND (t.retry_after IS NULL OR t.retry_after <= NOW())
+        AND NOT EXISTS (
+          SELECT 1
+          FROM hive_runtime_locks hrl
+          WHERE hrl.hive_id = t.hive_id
+            AND hrl.creation_paused = true
+        )
+        AND (
+          t.goal_id IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM goals g
+            WHERE g.id = t.goal_id
+              AND g.status = 'active'
+          )
+        )
         AND (
           SELECT COUNT(*) FROM tasks busy
           WHERE busy.status = 'active'

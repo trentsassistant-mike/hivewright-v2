@@ -1,4 +1,9 @@
 import type { Sql } from "postgres";
+import {
+  AGENT_AUDIT_EVENTS,
+  recordAgentAuditEventBestEffort,
+  type AgentAuditActor,
+} from "../audit/agent-events";
 import { sendNotification } from "../notifications/sender";
 import { pruneGoalSupervisor } from "../openclaw/goal-supervisor-cleanup";
 import { verifyLandedState } from "../software-pipeline/landed-state-gate";
@@ -84,6 +89,8 @@ export interface CompleteGoalOptions {
   learningGate?: LearningGateResult;
   /** Structured final status. Defaults to achieved unless evidence explicitly carries a status. */
   completionStatus?: GoalCompletionStatus;
+  /** Sanitized audit action label for the hive-memory write. */
+  auditActionKind?: string;
 }
 
 export interface CompleteGoalResult {
@@ -99,15 +106,33 @@ function statusFromEvidence(evidenceBundle: CompletionEvidenceItem[] | undefined
   return null;
 }
 
+function auditActor(createdBy: string): AgentAuditActor {
+  if (createdBy === "owner") return { type: "owner", id: createdBy, label: createdBy };
+  if (createdBy === "system") return { type: "system", id: createdBy, label: createdBy };
+  return { type: "agent", id: createdBy, label: createdBy };
+}
+
 export async function completeGoal(
   sql: Sql,
   goalId: string,
   completionSummary: string,
   options: CompleteGoalOptions = {},
 ): Promise<CompleteGoalResult> {
-  const landed = await verifyLandedState();
-  if (!landed.ok) {
-    throw new Error(`Goal completion blocked: ${landed.failures.join(", ")}`);
+  const [goalContext] = await sql<{ project_id: string | null; project_git_repo: boolean | null }[]>`
+    SELECT goals.project_id, projects.git_repo AS project_git_repo
+    FROM goals
+    LEFT JOIN projects ON projects.id = goals.project_id
+    WHERE goals.id = ${goalId}
+  `;
+  if (!goalContext) {
+    throw new Error(`Goal not found: ${goalId}`);
+  }
+
+  if (goalContext.project_git_repo === true) {
+    const landed = await verifyLandedState();
+    if (!landed.ok) {
+      throw new Error(`Goal completion blocked: ${landed.failures.join(", ")}`);
+    }
   }
 
   const createdBy = options.createdBy ?? "goal-supervisor";
@@ -199,10 +224,32 @@ export async function completeGoal(
     const memorySummary = requestedStatus === "achieved"
       ? `Goal "${goal.title}" achieved: ${completionSummary}`
       : `Goal "${goal.title}" status ${requestedStatus}: ${completionSummary}`;
-    await tx`
+    const [memory] = await tx<{ id: string }[]>`
       INSERT INTO hive_memory (hive_id, category, content, confidence, sensitivity)
       VALUES (${goal.hive_id}, 'general', ${memorySummary}, 1.0, 'internal')
+      RETURNING id
     `;
+    await recordAgentAuditEventBestEffort(tx as unknown as Sql, {
+      eventType: AGENT_AUDIT_EVENTS.hiveMemoryWritten,
+      actor: auditActor(createdBy),
+      hiveId: goal.hive_id,
+      goalId,
+      targetType: "hive_memory",
+      targetId: memory.id,
+      outcome: "success",
+      metadata: {
+        source: "goals.complete_goal",
+        actionKind: options.auditActionKind ?? "complete_goal",
+        memoryId: memory.id,
+        goalId,
+        category: "general",
+        sensitivity: "internal",
+        evidenceTaskCount: evidence.taskIds?.length ?? 0,
+        evidenceWorkProductCount: evidence.workProductIds?.length ?? 0,
+        evidenceBundleCount: evidence.bundle?.length ?? 0,
+        completionStatus: requestedStatus,
+      },
+    });
 
     // 3. Write audit row to goal_completions
     await tx`

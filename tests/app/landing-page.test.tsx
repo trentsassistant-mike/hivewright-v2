@@ -21,4 +21,9 @@ describe("LandingPage", () => {
     expect(screen.getByRole("button", { name: /internal preview only/i }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByText(/No public handoff channel is connected/i)).toBeTruthy();
   });
+
+  it("does not reintroduce AI-pilot positioning", () => {
+    const { container } = render(<LandingPage />);
+    expect(container.textContent ?? "").not.toMatch(/\b(AI pilot|pilot AI|pilot mode|pilot program|pilot budget)\b/i);
+  });
 });

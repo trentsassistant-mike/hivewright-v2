@@ -25,6 +25,8 @@ export type RecoveryBudget = {
    */
   openRecoveryDecisions: OpenRecoveryDecision[];
   replacementTaskCount: number;
+  replacementTaskLimit: number;
+  replacementTaskOverride: RecoveryBudgetReplacementOverride | null;
 };
 
 export type RecoveryBudgetRequest = {
@@ -38,6 +40,19 @@ export type RecoveryBudgetRequest = {
 export type RecoveryBudgetDecision =
   | { ok: true; budget: RecoveryBudget }
   | { ok: false; budget: RecoveryBudget; reason: string };
+
+export type RecoveryBudgetReplacementOverride = {
+  decisionId: string;
+  taskFamilyRootId: string;
+  replacementTasksPerFailureFamily: number;
+  approvedAt: string | null;
+};
+
+type RecoveryBudgetOverrideRecord = {
+  decision_id: string;
+  resolved_at: Date | null;
+  route_metadata: unknown;
+};
 
 export async function loadRecoveryBudget(sql: Sql, taskId: string): Promise<RecoveryBudget> {
   const [row] = await sql<{
@@ -107,12 +122,18 @@ export async function loadRecoveryBudget(sql: Sql, taskId: string): Promise<Reco
     FROM family
   `;
 
+  const replacementTaskOverride = await loadReplacementTaskOverride(sql, row.root_task_id);
+  const replacementTaskLimit = replacementTaskOverride?.replacementTasksPerFailureFamily ??
+    RECOVERY_BUDGET_LIMITS.replacementTasksPerFailureFamily;
+
   return {
     rootTaskId: row.root_task_id,
     doctorTaskCount: Number(row.doctor_task_count),
     openRecoveryDecisionCount: Number(row.open_recovery_decision_count),
     openRecoveryDecisions: row.open_recovery_decisions ?? [],
     replacementTaskCount: Number(row.replacement_task_count),
+    replacementTaskLimit,
+    replacementTaskOverride,
   };
 }
 
@@ -175,9 +196,9 @@ function recoveryBudgetViolations(budget: RecoveryBudget, request: RecoveryBudge
       `open recovery decisions ${openDecisionTotal}/${RECOVERY_BUDGET_LIMITS.openRecoveryDecisionsPerFailureFamily}`,
     );
   }
-  if (replacementTaskTotal > RECOVERY_BUDGET_LIMITS.replacementTasksPerFailureFamily) {
+  if (replacementTaskTotal > budget.replacementTaskLimit) {
     violations.push(
-      `replacement tasks ${replacementTaskTotal}/${RECOVERY_BUDGET_LIMITS.replacementTasksPerFailureFamily}`,
+      `replacement tasks ${replacementTaskTotal}/${budget.replacementTaskLimit}`,
     );
   }
 
@@ -214,17 +235,126 @@ function formatRecoveryBudgetReason(
     blockerSegments.length > 0
       ? `Blocking decisions: ${blockerSegments.join("; ")}.`
       : "";
+  const replacementOverrideSentence = budget.replacementTaskOverride
+    ? `Replacement override: decision ${budget.replacementTaskOverride.decisionId} authorizes ${budget.replacementTaskLimit} replacement tasks for this family.`
+    : "";
   return [
     `Recovery budget exhausted for task family rooted at ${budget.rootTaskId}.`,
     `Blocked action: ${request.action}.`,
     `Budget breach: ${violations.join(", ")}.`,
     `Open recovery decisions: ${budget.openRecoveryDecisionCount}/${RECOVERY_BUDGET_LIMITS.openRecoveryDecisionsPerFailureFamily}.`,
     blockerSentence,
+    replacementOverrideSentence,
     `Current budget: doctor tasks ${budget.doctorTaskCount}/${RECOVERY_BUDGET_LIMITS.doctorTasksPerFailureFamily},`,
     `open recovery decisions ${budget.openRecoveryDecisionCount}/${RECOVERY_BUDGET_LIMITS.openRecoveryDecisionsPerFailureFamily},`,
-    `replacement tasks ${budget.replacementTaskCount}/${RECOVERY_BUDGET_LIMITS.replacementTasksPerFailureFamily}.`,
+    `replacement tasks ${budget.replacementTaskCount}/${budget.replacementTaskLimit}.`,
     `Original reason: ${request.reason}`,
   ]
     .filter((part) => part.length > 0)
     .join(" ");
+}
+
+async function loadReplacementTaskOverride(
+  sql: Sql,
+  rootTaskId: string,
+): Promise<RecoveryBudgetReplacementOverride | null> {
+  const rows = await sql<RecoveryBudgetOverrideRecord[]>`
+    WITH RECURSIVE family AS (
+      SELECT id
+      FROM tasks
+      WHERE id = ${rootTaskId}
+
+      UNION ALL
+
+      SELECT child.id
+      FROM tasks child
+      JOIN family ON child.parent_task_id = family.id
+    )
+    SELECT
+      id AS decision_id,
+      resolved_at,
+      route_metadata
+    FROM decisions
+    WHERE status = 'resolved'
+      AND task_id IN (SELECT id FROM family)
+      AND route_metadata IS NOT NULL
+  `;
+
+  let selected: RecoveryBudgetReplacementOverride | null = null;
+  for (const row of rows) {
+    const parsed = parseReplacementTaskOverride(row, rootTaskId);
+    if (!parsed) continue;
+    if (!selected || parsed.replacementTasksPerFailureFamily > selected.replacementTasksPerFailureFamily) {
+      selected = parsed;
+    }
+  }
+
+  return selected;
+}
+
+function parseReplacementTaskOverride(
+  row: RecoveryBudgetOverrideRecord,
+  expectedRootTaskId: string,
+): RecoveryBudgetReplacementOverride | null {
+  if (!isRecord(row.route_metadata)) return null;
+  const payload = getOverrideRecord(
+    row.route_metadata.recoveryBudgetOverride ?? row.route_metadata.recovery_budget_override,
+  );
+  if (!payload) return null;
+
+  const enabled = booleanField(payload, ["enabled"], true);
+  const taskFamilyRootId = stringField(payload, ["taskFamilyRootId", "task_family_root_id"]);
+  const replacementTasksPerFailureFamily = integerField(
+    payload,
+    ["replacementTasksPerFailureFamily", "replacement_tasks_per_failure_family"],
+  );
+  if (!enabled || taskFamilyRootId !== expectedRootTaskId || replacementTasksPerFailureFamily === null) {
+    return null;
+  }
+  if (replacementTasksPerFailureFamily <= RECOVERY_BUDGET_LIMITS.replacementTasksPerFailureFamily) {
+    return null;
+  }
+
+  return {
+    decisionId: row.decision_id,
+    taskFamilyRootId,
+    replacementTasksPerFailureFamily,
+    approvedAt: stringField(payload, ["approvedAt", "approved_at"]) ?? row.resolved_at?.toISOString() ?? null,
+  };
+}
+
+function getOverrideRecord(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringField(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function integerField(record: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isInteger(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function booleanField(record: Record<string, unknown>, keys: string[], fallback: boolean): boolean {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") return value;
+  }
+  return fallback;
 }

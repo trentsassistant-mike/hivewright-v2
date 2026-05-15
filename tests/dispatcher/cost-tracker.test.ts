@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { recordTaskCost, checkGoalBudget } from "@/dispatcher/cost-tracker";
+import { recordTaskCost, checkGoalBudget, checkAiBudget } from "@/dispatcher/cost-tracker";
 import { calculateCostCents } from "@/adapters/provider-config";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
@@ -10,8 +10,8 @@ beforeEach(async () => {
   await truncateAll(sql);
 
   const [biz] = await sql`
-    INSERT INTO hives (slug, name, type)
-    VALUES ('cost-test-biz', 'Cost Test', 'digital')
+    INSERT INTO hives (slug, name, type, ai_budget_cap_cents)
+    VALUES ('cost-test-biz', 'Cost Test', 'digital', 10000)
     RETURNING *
   `;
   bizId = biz.id;
@@ -43,6 +43,7 @@ describe("recordTaskCost", () => {
       totalContextTokens: 1_000,
       freshInputTokens: 600,
       cachedInputTokens: 400,
+      cacheCreationTokens: 125,
       cachedInputTokensKnown: true,
       tokensOutput: 250,
       estimatedBillableCostCents: 1,
@@ -59,7 +60,8 @@ describe("recordTaskCost", () => {
         estimated_billable_cost_cents,
         tokens_input,
         cost_cents,
-        model_used
+        model_used,
+        usage_details
       FROM tasks WHERE id = ${task.id}
     `;
     expect(updated.fresh_input_tokens).toBe(600);
@@ -71,6 +73,15 @@ describe("recordTaskCost", () => {
     expect(updated.tokens_input).toBe(1_000);
     expect(updated.cost_cents).toBe(1);
     expect(updated.model_used).toBe("openai/gpt-5.5");
+    expect(updated.usage_details).toEqual({
+      totalInputTokens: 1_000,
+      freshInputTokens: 600,
+      outputTokens: 250,
+      cacheReadTokens: 400,
+      cacheCreationTokens: 125,
+      cachedInputTokensKnown: true,
+      estimatedBillableCostCents: 1,
+    });
   });
 
   it("persists missing cache metadata conservatively", async () => {
@@ -342,6 +353,32 @@ describe("recordTaskCost", () => {
 });
 
 describe("checkGoalBudget", () => {
+  it("persists warning state at 80 percent of the recorded cap", async () => {
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, goal_id, status, cost_cents)
+      VALUES (${bizId}, 'cost-test-role', 'owner', 'cost-test-budget-warning', 'B', ${goalId}, 'completed', 800)
+    `;
+
+    const result = await checkGoalBudget(sql, goalId);
+    expect(result.exceeded).toBe(false);
+    expect(result.state).toBe("warning");
+    expect(result.warning).toBe(true);
+    expect(result.paused).toBe(false);
+    expect(result.remainingCents).toBe(200);
+    expect(result.percentUsed).toBe(80);
+
+    const [goal] = await sql`
+      SELECT status, budget_state, budget_warning_triggered_at, budget_enforced_at, budget_enforcement_reason
+      FROM goals
+      WHERE id = ${goalId}
+    `;
+    expect(goal.status).toBe("active");
+    expect(goal.budget_state).toBe("warning");
+    expect(goal.budget_warning_triggered_at).not.toBeNull();
+    expect(goal.budget_enforced_at).toBeNull();
+    expect(goal.budget_enforcement_reason).toBeNull();
+  });
+
   it("returns under-budget when costs are within limit", async () => {
     await sql`
       INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, goal_id, status, cost_cents)
@@ -352,6 +389,9 @@ describe("checkGoalBudget", () => {
     expect(result.exceeded).toBe(false);
     expect(result.spentCents).toBe(300);
     expect(result.budgetCents).toBe(1000);
+    expect(result.state).toBe("ok");
+    expect(result.warning).toBe(false);
+    expect(result.paused).toBe(false);
   });
 
   it("returns exceeded when costs surpass budget", async () => {
@@ -365,6 +405,22 @@ describe("checkGoalBudget", () => {
     const result = await checkGoalBudget(sql, goalId);
     expect(result.exceeded).toBe(true);
     expect(result.spentCents).toBe(1100);
+    expect(result.state).toBe("paused");
+    expect(result.warning).toBe(true);
+    expect(result.paused).toBe(true);
+    expect(result.remainingCents).toBe(0);
+    expect(result.percentUsed).toBe(110);
+
+    const [goal] = await sql`
+      SELECT status, budget_state, budget_warning_triggered_at, budget_enforced_at, budget_enforcement_reason
+      FROM goals
+      WHERE id = ${goalId}
+    `;
+    expect(goal.status).toBe("paused");
+    expect(goal.budget_state).toBe("paused");
+    expect(goal.budget_warning_triggered_at).not.toBeNull();
+    expect(goal.budget_enforced_at).not.toBeNull();
+    expect(goal.budget_enforcement_reason).toBe("Paused by budget");
   });
 
   it("updates the goal spent_cents column", async () => {
@@ -377,5 +433,39 @@ describe("checkGoalBudget", () => {
 
     const [goal] = await sql`SELECT spent_cents FROM goals WHERE id = ${goalId}`;
     expect(goal.spent_cents).toBe(250);
+  });
+});
+
+describe("checkAiBudget", () => {
+  it("pauses new work for the workspace after a breaching attempt completes", async () => {
+    await sql`
+      INSERT INTO tasks (
+        hive_id,
+        assigned_to,
+        created_by,
+        title,
+        brief,
+        status,
+        estimated_billable_cost_cents
+      )
+      VALUES
+        (${bizId}, 'cost-test-role', 'owner', 'pilot-budget-breach-a', 'A', 'completed', 6000),
+        (${bizId}, 'cost-test-role', 'owner', 'pilot-budget-breach-b', 'B', 'completed', 4000)
+    `;
+
+    const result = await checkAiBudget(sql, bizId);
+    expect(result.state).toBe("breached");
+    expect(result.enforcement.blocksNewWork).toBe(true);
+    expect(result.enforcement.mode).toBe("creation_pause");
+
+    const [lock] = await sql`
+      SELECT creation_paused, reason, paused_by, operating_state
+      FROM hive_runtime_locks
+      WHERE hive_id = ${bizId}
+    `;
+    expect(lock.creation_paused).toBe(true);
+    expect(lock.reason).toBe("Paused by AI spend budget breach");
+    expect(lock.paused_by).toBe("system:ai-budget");
+    expect(lock.operating_state).toBe("paused");
   });
 });

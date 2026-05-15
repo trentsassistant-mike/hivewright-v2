@@ -13,6 +13,7 @@ import {
 import { checkAndFireSchedules } from "./schedule-timer";
 import { runScheduledModelDiscovery } from "./model-discovery-schedule";
 import { runSystemModelHealthRenewal } from "./model-health-renewal";
+import { recordTaskLifecycleTransitionBestEffort } from "@/audit/task-lifecycle";
 
 import {
   findNewGoals,
@@ -57,7 +58,7 @@ import {
 } from "../adapters/codex";
 import { emitBinaryWorkProduct, emitWorkProduct, shouldEmitWorkProduct } from "../work-products/emitter";
 import { writeTaskLog } from "./task-log-writer";
-import { recordTaskCost, checkGoalBudget } from "./cost-tracker";
+import { recordTaskCost, checkGoalBudget, checkAiBudget } from "./cost-tracker";
 import { calculateCostCents } from "../adapters/provider-config";
 import { routeToQa, processQaResult, notifyGoalSupervisorOfQaFailure, parseQaVerdict } from "./qa-router";
 import {
@@ -925,6 +926,7 @@ export class Dispatcher {
         result.tokensInput ||
         result.tokensOutput ||
         result.cachedInputTokens !== undefined ||
+        result.cacheCreationTokens !== undefined ||
         result.costCents !== undefined ||
         result.estimatedBillableCostCents !== undefined
       ) {
@@ -933,12 +935,14 @@ export class Dispatcher {
           totalContextTokens: result.totalContextTokens,
           freshInputTokens: result.freshInputTokens,
           cachedInputTokens: result.cachedInputTokens,
+          cacheCreationTokens: result.cacheCreationTokens,
           cachedInputTokensKnown: result.cachedInputTokensKnown,
           tokensOutput: result.tokensOutput ?? 0,
           costCents: result.costCents,
           estimatedBillableCostCents: result.estimatedBillableCostCents,
           modelUsed: result.modelUsed || ctx.model,
           adapterUsed: adapterType,
+          usageDetails: result.usageDetails,
         });
 
         // Check goal budget
@@ -947,6 +951,11 @@ export class Dispatcher {
           if (budget.exceeded) {
             console.log(`[dispatcher] Goal ${task.goalId} budget exceeded: ${budget.spentCents}/${budget.budgetCents} cents`);
           }
+        }
+
+        const aiBudget = await checkAiBudget(this.sql, task.hiveId);
+        if (aiBudget.state === "breached" && aiBudget.enforcement.blocksNewWork) {
+          console.log(`[dispatcher] Hive ${task.hiveId} AI spend budget breached: ${aiBudget.consumedCents}/${aiBudget.capCents} cents`);
         }
       }
 
@@ -975,6 +984,7 @@ export class Dispatcher {
           department: ctx.roleTemplate.department,
           content: result.output,
           summary: result.output,
+          usageDetails: result.usageDetails ?? null,
         });
 
         if (result.artifacts?.length) {
@@ -1001,6 +1011,7 @@ export class Dispatcher {
                 artifact.promptTokens ?? result.tokensInput ?? 0,
                 artifact.outputTokens ?? result.tokensOutput ?? 0,
               ),
+              usageDetails: artifact.usageDetails ?? result.usageDetails ?? null,
               metadata: artifact.metadata ?? null,
             });
           }
@@ -1186,8 +1197,14 @@ export class Dispatcher {
       if (task.parentTaskId && task.title.startsWith("[Doctor]")) {
         const FIXABLE_PATTERNS = ["spawn ENOENT", "ENOENT", "permission denied"];
         const EXECUTION_SLICE_PATTERNS = ["execution slice exceeded adapter timeout", "needs decomposition into smaller tasks", "checkpointed implementation"];
-        const [parentTask] = await this.sql`
-          SELECT failure_reason, retry_count FROM tasks WHERE id = ${task.parentTaskId}
+        const [parentTask] = await this.sql<{
+          hive_id: string;
+          goal_id: string | null;
+          status: string;
+          failure_reason: string | null;
+          retry_count: number | null;
+        }[]>`
+          SELECT hive_id, goal_id, status, failure_reason, retry_count FROM tasks WHERE id = ${task.parentTaskId}
         `;
         const failureReason = ((parentTask?.failure_reason as string) || "").toLowerCase();
         const isFixable = FIXABLE_PATTERNS.some(p => failureReason.includes(p.toLowerCase()));
@@ -1197,12 +1214,22 @@ export class Dispatcher {
         if (isExecutionSlice) {
           console.log(`[dispatcher] Doctor classified parent task ${task.parentTaskId} as execution-slice-limited; leaving failed for supervisor/owner rescoping instead of auto-retrying.`);
         } else if (isFixable && retryCount < 3) {
-          await this.sql`
+          const [updatedParentTask] = await this.sql<{ status: string }[]>`
             UPDATE tasks
             SET status = 'pending', retry_count = retry_count + 1,
                 retry_after = NULL, updated_at = NOW()
             WHERE id = ${task.parentTaskId}
+            RETURNING status
           `;
+          await recordTaskLifecycleTransitionBestEffort(this.sql, {
+            taskId: task.parentTaskId,
+            hiveId: parentTask.hive_id,
+            goalId: parentTask.goal_id,
+            previousStatus: parentTask.status,
+            nextStatus: updatedParentTask?.status ?? "pending",
+            source: "dispatcher.doctorAutoRetry",
+            reason: `Doctor auto-retry after fixable failure: ${parentTask.failure_reason ?? "unknown failure"}`,
+          });
           console.log(`[dispatcher] Doctor auto-retry: reset task ${task.parentTaskId} to pending (attempt ${retryCount + 1}/3)`);
         } else if (isFixable) {
           console.log(`[dispatcher] Doctor auto-retry: task ${task.parentTaskId} hit retry cap (${retryCount}/3), leaving failed`);

@@ -1,0 +1,5 @@
+{
+  "provider": "openai",
+  "apiKey": "realish-secret-value-should-redact-6789",
+  "mode": "draft"
+}
